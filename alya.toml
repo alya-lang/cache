@@ -1,9 +1,9 @@
 [package]
 name = "cache"
-version = "0.2.0"
+version = "0.1.0"
 alya-version = "0.0.19"
 entry = "src/lib.alya"
-description = "High-performance in-memory cache with LRU eviction, TTL expiry, and statistics for Alya"
+description = "High-performance in-memory cache with LRU/LFU/FIFO eviction, TTL expiry, hooks, snapshots, and statistics for Alya"
 authors = ["Alya Language Contributors <https://github.com/alya-lang>"]
 license = "MIT"
 homepage = "https://github.com/alya-lang/alya"
