@@ -1,0 +1,184 @@
+## cache Snapshot Serialization (save/load)
+##
+## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
+## Line-based snapshot format for scalar values (string/int/float):
+##
+## ```text
+## alyacache\tv1
+## <escaped key>\t<kind>\t<ttl seconds>\t<escaped value>
+## ```
+##
+## - `kind` is `s` (string), `i` (int), or `f` (float). Other value types
+##   (arrays, maps, bools-as-ints aside) are skipped on save.
+## - `ttl` is remaining seconds (`0` = persist). Already-expired entries
+##   are skipped on save; malformed lines are skipped on load.
+## - Keys and values escape `\`, tab, newline, and carriage return.
+
+import "std/str"
+import "std/math"
+import "../types.alya"
+
+## Format header line identifying snapshot files.
+pub function snapshot_header() -> string
+    return "alyacache\tv1"
+end
+
+# Left-pads an integer with zeros to 6 digits.
+function pad6(n: int) -> string
+    let s = str(n)
+    while len(s) < 6
+        s = "0" + s
+    end
+    return s
+end
+
+## Encodes a float with fixed 6-decimal precision (e.g. `"-3.500000"`).
+##
+## NOTE: Manual codec on purpose: `str()` on float values prints raw bits
+## on some builds, so floats never go through `str()` here. Precision is
+## 6 decimals; very large magnitudes may lose exactness.
+pub function snapshot_encode_float(v: float) -> string
+    let neg = 0
+    let a = v
+    if a < 0.0
+        neg = 1
+        a = 0.0 - a
+    end
+    let whole = floor(a)
+    let frac = round((a - whole) * 1000000.0)
+    if frac >= 1000000
+        whole = whole + 1
+        frac = 0
+    end
+    let out = str(whole) + "." + pad6(frac)
+    if neg == 1
+        out = "-" + out
+    end
+    return out
+end
+
+## Decodes a string produced by `snapshot_encode_float`.
+pub function snapshot_decode_float(s: string) -> float
+    let t = s
+    let neg = 1.0
+    if len(t) > 0 and t[..1] == "-"
+        neg = 0.0 - 1.0
+        t = t[1..]
+    end
+    let dot = index_of(t, ".")
+    if dot < 0
+        return neg * to_int(t)
+    end
+    let whole = to_int(t[..dot])
+    let frac = to_int(t[(dot + 1)..])
+    return neg * (whole + frac / 1000000.0)
+end
+
+## Escapes `\`, tab, newline, and carriage return in `s`.
+pub function snapshot_escape(s: string) -> string
+    let out = ""
+    let i = 0
+    let n = len(s)
+    while i < n
+        let ch = char_at(s, i)
+        when ch
+            is "\\" then out = out + "\\\\"
+            is "\t" then out = out + "\\t"
+            is "\n" then out = out + "\\n"
+            is "\r" then out = out + "\\r"
+            else out = out + ch
+        end
+        i += 1
+    end
+    return out
+end
+
+## Reverses `snapshot_escape`.
+pub function snapshot_unescape(s: string) -> string
+    let out = ""
+    let i = 0
+    let n = len(s)
+    let esc = 0
+    while i < n
+        let ch = char_at(s, i)
+        if esc == 1
+            when ch
+                is "n" then out = out + "\n"
+                is "t" then out = out + "\t"
+                is "r" then out = out + "\r"
+                is "\\" then out = out + "\\"
+                else out = out + ch
+            end
+            esc = 0
+        else
+            if ch == "\\"
+                esc = 1
+            else
+                out = out + ch
+            end
+        end
+        i += 1
+    end
+    return out
+end
+
+## Serializes one entry into a snapshot line, or "" when skipped.
+##
+## Only entries written via the typed setters (`set_str`/`set_int`/
+## `set_float`) carry a kind tag and are persisted; generic `set` values
+## and already-expired entries are skipped. (Runtime type detection via
+## `is` is unreliable for dynamic values on some builds, so the kind is
+## recorded explicitly at write time.)
+##
+## NOTE: Loop-free leaf (single entry, no iteration). Called once per key
+## from the save loop in the lib facade.
+pub function snapshot_line(c: Cache, key) -> string
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            let kind = meta.kind
+            if kind == "s" or kind == "i" or kind == "f"
+                # "f" values are already fixed-point strings (see set_float).
+                let repr = str(c.store[key])
+                if meta.expires_at != 0
+                    let ttl_left = meta.expires_at - time()
+                    if ttl_left <= 0
+                        return ""
+                    end
+                    return snapshot_escape(key) + "\t" + kind + "\t" + str(ttl_left) + "\t" + snapshot_escape(repr)
+                end
+                return snapshot_escape(key) + "\t" + kind + "\t0\t" + snapshot_escape(repr)
+            end
+        end
+    end
+    return ""
+end
+
+## Parses a snapshot line into `[key, value, ttl, kind]` or null when malformed.
+##
+## `"f"` values stay in fixed-point string form (decoded lazily on read);
+## `"i"` values are converted with `to_int` eagerly.
+##
+## NOTE: Plain sequential `if`s on purpose: `when` value patterns on
+## dynamic strings miscompile on some builds. `==` is reliable.
+pub function snapshot_parse(line: string)
+    let parts = split(line, "\t")
+    if len(parts) != 4
+        return null
+    end
+    let key = snapshot_unescape(parts[0])
+    let kind = parts[1]
+    let ttl = to_int(parts[2])
+    let raw = snapshot_unescape(parts[3])
+    if kind == "s"
+        return [key, raw, ttl, "s"]
+    end
+    if kind == "i"
+        return [key, to_int(raw), ttl, "i"]
+    end
+    if kind == "f"
+        # Already fixed-point form; stored as-is with the "f" tag.
+        return [key, raw, ttl, "f"]
+    end
+    return null
+end

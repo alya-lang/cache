@@ -1,6 +1,6 @@
 [package]
 name = "cache"
-version = "0.1.0"
+version = "0.2.0"
 alya-version = "0.0.19"
 entry = "src/lib.alya"
 description = "High-performance in-memory cache with LRU eviction, TTL expiry, and statistics for Alya"

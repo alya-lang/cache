@@ -1,6 +1,7 @@
 ## Example usage and walkthrough for cache
 ## Part of the Alya Language package ecosystem (https://github.com/alya-lang)
 
+import "std/fs"
 import "../src/lib.alya" as pkg
 
 function main()
@@ -81,7 +82,64 @@ function main()
     say "after clear size => " + str(c.size())
     say ""
 
+    # ───────────────────────────────────────────────────────────
+    # 7. Peek, Touch & Runtime Config
+    # ───────────────────────────────────────────────────────────
+    say "--- 7. Peek, Touch & Config ---"
+    let t = pkg::lru_cache(2, 0)
+    t.set("a", 1)
+    t.set("b", 2)
+    t.touch("a")
+    t.set("c", 3)
+    say "has a after touch => " + str(t.has("a"))
+    say "peek b => " + str(t.peek("b"))
+    t.set_capacity(1)
+    say "size after shrink => " + str(t.size())
+    t.set_default_ttl(60)
+    t.set("fresh", "x")
+    say "fresh ttl => " + str(t.ttl("fresh"))
+    say "deleted by prefix => " + str(t.delete_by_prefix("fr"))
+    say ""
+
+    # ───────────────────────────────────────────────────────────
+    # 8. LFU, Hooks, Compute & Snapshot
+    # ───────────────────────────────────────────────────────────
+    say "--- 8. LFU, Hooks, Compute & Snapshot ---"
+    let f = pkg::lfu_cache(2, 0)
+    f.on_evict(evicted_note)
+    f.set("hot", "H")
+    f.set("cold", "C")
+    f.get("hot")
+    f.get("hot")
+    f.set("new", "N")
+    say "lfu keeps hot => " + str(f.has("hot"))
+    say "evict notes => " + str(len(evicted_log))
+
+    let m = pkg::new_cache(16, 0)
+    say "computed => " + m.get_or_compute("k", make_value)
+    m.set_jittered("j", "v", 100, 20)
+    say "jittered ttl => " + str(m.ttl("j"))
+    m.set_str("who", "Ada")
+    m.set_int("n", 7)
+    say "saved => " + str(m.save("demo-snap.tmp")) + " entries"
+    let m2 = pkg::new_cache(16, 0)
+    say "loaded => " + str(m2.load("demo-snap.tmp")) + " entries"
+    say "who => " + m2.get("who")
+    say ""
+    fs_remove("demo-snap.tmp")
+
     say "Done!"
+end
+
+let evicted_log = []
+
+function evicted_note(key, _value)
+    evicted_log.push(key)
+    return 1
+end
+
+function make_value(key)
+    return "made:" + key
 end
 
 main()

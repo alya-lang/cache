@@ -65,6 +65,25 @@ function main()
     end
     bench_stop(runner, "stats() 20k snapshots")
 
+    # Bench 7: peek() hit throughput — 50k reads
+    bench_start(runner, 50000)
+    let p = 0
+    while p < 50000
+        c1.peek("k1")
+        p += 1
+    end
+    bench_stop(runner, "peek() hit 50k reads")
+
+    # Bench 8: LFU set with eviction — 10k inserts at capacity 128
+    let c8 = pkg::lfu_cache(128, 0)
+    bench_start(runner, 10000)
+    let q = 0
+    while q < 10000
+        c8.set("key-{q}", q)
+        q += 1
+    end
+    bench_stop(runner, "lfu set() with eviction 10k inserts")
+
     bench_summary(runner)
 end
 

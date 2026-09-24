@@ -8,6 +8,7 @@
 ## live as typed `CacheMeta` structs in the parallel `meta` map.
 
 import "../types.alya"
+import "./snapshot.alya"
 
 # ───────────────────────────────────────────────────────────────
 # Private Helpers
@@ -57,6 +58,23 @@ function touch_key(c: Cache, key)
     c.order.push(key)
 end
 
+# Fires the eviction hook when one is registered. Reads are single-shot
+# (no loop here); callers pass already-sanitized keys and live values.
+function fire_evict(c: Cache, key, value)
+    if c.evict_hook is not null
+        let cb = c.evict_hook
+        cb(key, value)
+    end
+end
+
+# Fires the expiry hook when one is registered.
+function fire_expire(c: Cache, key, value)
+    if c.expire_hook is not null
+        let cb = c.expire_hook
+        cb(key, value)
+    end
+end
+
 # Evicts a single entry when capacity is reached. Returns 1 if evicted.
 function evict_one(c: Cache) -> int
     if c.capacity <= 0
@@ -71,22 +89,60 @@ function evict_one(c: Cache) -> int
     if len(c.order) == 0
         return 0
     end
-    let victim = c.order[0]
+    if c.policy == EvictionPolicy.LFU
+        return evict_lfu(c)
+    end
+    let victim = "" + c.order[0]
+    return evict_key(c, victim)
+end
+
+# Removes exactly `victim` from both maps and order. Returns 1 if removed.
+function evict_key(c: Cache, victim) -> int
+    let value = null
     if victim in c.store
+        value = c.store[victim]
         c.store.remove(victim)
+    else
+        return 0
     end
     if victim in c.meta
         c.meta.remove(victim)
     end
-    let rest = []
-    let i = 1
-    while i < len(c.order)
-        rest.push(c.order[i])
+    detach_key(c, victim)
+    c.evictions += 1
+    fire_evict(c, victim, value)
+    return 1
+end
+
+# Evicts the least-frequently-used key (ties break by age, oldest first).
+#
+# NOTE: Index-based `while` loop with sanitized keys and direct reads,
+# no helper calls inside the body (same discipline as `evict_one`).
+function evict_lfu(c: Cache) -> int
+    let best = ""
+    let best_hits = -1
+    let n = len(c.order)
+    let i = 0
+    while i < n
+        let key = "" + c.order[i]
+        if key in c.meta
+            let meta = c.meta[key]
+            if best_hits < 0 or meta.entry_hits < best_hits
+                best_hits = meta.entry_hits
+                best = key
+            end
+        elif key in c.store
+            if best_hits < 0 or 0 < best_hits
+                best_hits = 0
+                best = key
+            end
+        end
         i += 1
     end
-    c.order = rest
-    c.evictions += 1
-    return 1
+    if best == ""
+        return 0
+    end
+    return evict_key(c, best)
 end
 
 # Removes the entry for `key` from both maps and order. Returns 1 if removed.
@@ -117,7 +173,7 @@ end
 ##
 ## ### Returns
 ## `1` on success.
-pub function store_set(c: Cache, key, value, ttl: int = -1) -> int
+pub function store_set(c: Cache, key, value, ttl: int = -1, kind: string = "") -> int
     let effective = resolve_ttl(ttl, c.default_ttl)
     let now = time()
     let expires = expiry_for(effective)
@@ -133,7 +189,8 @@ pub function store_set(c: Cache, key, value, ttl: int = -1) -> int
     c.meta[key] = CacheMeta {
         expires_at: expires,
         inserted_at: now,
-        entry_hits: 0
+        entry_hits: 0,
+        kind: kind
     }
     c.order.push(key)
     return 1
@@ -148,8 +205,10 @@ pub function store_get(c: Cache, key)
         if key in c.meta
             let meta = c.meta[key]
             if meta_expired(meta) == 1
+                let gone = c.store[key]
                 drop_key(c, key)
                 c.misses += 1
+                fire_expire(c, key, gone)
                 return null
             end
             meta.entry_hits += 1
@@ -160,6 +219,40 @@ pub function store_get(c: Cache, key)
             touch_key(c, key)
         end
         return c.store[key]
+    end
+    c.misses += 1
+    return null
+end
+
+## Reads `key` as a float written via `set_float`.
+##
+## Returns the decoded float value, or null on miss/expiry/wrong kind.
+## Plain `get` on `"f"` entries returns the fixed-point string form;
+## use this function for numeric comparison and arithmetic.
+pub function store_get_float(c: Cache, key)
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                let gone = c.store[key]
+                drop_key(c, key)
+                c.misses += 1
+                fire_expire(c, key, gone)
+                return null
+            end
+            if meta.kind != "f"
+                c.misses += 1
+                return null
+            end
+            meta.entry_hits += 1
+            c.meta[key] = meta
+            c.hits += 1
+            if c.policy == EvictionPolicy.LRU
+                touch_key(c, key)
+            end
+            return snapshot_decode_float(c.store[key])
+        end
+        return null
     end
     c.misses += 1
     return null
@@ -182,8 +275,10 @@ pub function store_has(c: Cache, key) -> int
         if key in c.meta
             let meta = c.meta[key]
             if meta_expired(meta) == 1
+                let gone = c.store[key]
                 drop_key(c, key)
                 c.misses += 1
+                fire_expire(c, key, gone)
                 return 0
             end
         end
@@ -221,10 +316,13 @@ pub function prune_key(c: Cache, key) -> int
     if key in c.meta
         let meta = c.meta[key]
         if meta.expires_at != 0 and time() >= meta.expires_at
+            let gone = null
             if key in c.store
+                gone = c.store[key]
                 c.store.remove(key)
             end
             c.meta.remove(key)
+            fire_expire(c, key, gone)
             return 1
         end
     end
@@ -252,8 +350,10 @@ pub function store_ttl(c: Cache, key) -> int
         if key in c.meta
             let meta = c.meta[key]
             if meta_expired(meta) == 1
+                let gone = c.store[key]
                 drop_key(c, key)
                 c.misses += 1
+                fire_expire(c, key, gone)
                 return -1
             end
             if meta.expires_at == 0
@@ -281,8 +381,10 @@ pub function store_expire(c: Cache, key, ttl: int) -> int
         if key in c.meta
             let meta = c.meta[key]
             if meta_expired(meta) == 1
+                let gone = c.store[key]
                 drop_key(c, key)
                 c.misses += 1
+                fire_expire(c, key, gone)
                 return 0
             end
             let effective = resolve_ttl(ttl, c.default_ttl)
@@ -293,4 +395,89 @@ pub function store_expire(c: Cache, key, ttl: int) -> int
         return 1
     end
     return 0
+end
+
+## Reads `key` without affecting recency or counters.
+##
+## Returns the stored value, or null when missing/expired. Expired entries
+## are still removed eagerly (lazy cleanup), but no hit/miss is recorded
+## and LRU recency is left untouched.
+pub function store_peek(c: Cache, key)
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                let gone = c.store[key]
+                drop_key(c, key)
+                fire_expire(c, key, gone)
+                return null
+            end
+        end
+        return c.store[key]
+    end
+    return null
+end
+
+## Refreshes recency (and optionally TTL) without changing the value.
+##
+## Returns 1 when `key` is live, 0 when missing/expired. Never touches
+## hit/miss counters. `ttl = -1` keeps the current expiry, `ttl = 0`
+## persists the entry, `ttl > 0` sets a fresh TTL from now.
+pub function store_touch(c: Cache, key, ttl: int = -1) -> int
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                let gone = c.store[key]
+                drop_key(c, key)
+                c.misses += 1
+                fire_expire(c, key, gone)
+                return 0
+            end
+            if ttl >= 0
+                meta.expires_at = expiry_for(ttl)
+                c.meta[key] = meta
+            end
+        end
+        if c.policy == EvictionPolicy.LRU
+            touch_key(c, key)
+        end
+        return 1
+    end
+    return 0
+end
+
+## Updates the capacity, evicting excess entries when shrinking.
+##
+## `capacity <= 0` means unbounded (no eviction is performed).
+pub function store_set_capacity(c: Cache, capacity: int)
+    c.capacity = capacity
+    if capacity <= 0
+        return
+    end
+    let budget = len(c.store) + 8
+    while len(c.store) > capacity and budget > 0
+        budget = budget - 1
+        if c.policy == EvictionPolicy.None
+            if len(c.order) == 0
+                break
+            end
+            drop_key(c, "" + c.order[0])
+        else
+            if evict_one(c) == 0
+                break
+            end
+        end
+    end
+end
+
+## Updates the default TTL applied when `set` omits `ttl`.
+##
+## Negative values are normalized to `0` (never expires).
+pub function store_set_default_ttl(c: Cache, default_ttl: int)
+    if default_ttl < 0
+        c.default_ttl = 0
+    else
+        c.default_ttl = default_ttl
+    end
 end

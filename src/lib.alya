@@ -4,8 +4,10 @@
 ## Serves as the primary public entry point for the cache package,
 ## exposing constructors, stateful Cache methods, and batch helpers.
 
+import "std/fs"
 import "./types.alya"
 import "./core/store.alya"
+import "./core/snapshot.alya"
 
 # ───────────────────────────────────────────────────────────────
 # Constructors
@@ -40,6 +42,14 @@ pub function fifo_cache(capacity: int = 128, default_ttl: int = 0) -> Cache
     return cache_new(capacity, default_ttl, EvictionPolicy.FIFO)
 end
 
+## Creates an LFU cache with the given capacity and optional default TTL.
+##
+## Evicts the least-frequently-used key; frequency ties break by age
+## (oldest first). Reads bump frequency but never reorder entries.
+pub function lfu_cache(capacity: int = 128, default_ttl: int = 0) -> Cache
+    return cache_new(capacity, default_ttl, EvictionPolicy.LFU)
+end
+
 ## Creates an unbounded cache (no eviction) with an optional default TTL.
 pub function unbounded_cache(default_ttl: int = 0) -> Cache
     return cache_new(0, default_ttl, EvictionPolicy.None)
@@ -57,13 +67,59 @@ end
 ## Inserts or overwrites `key` with `value` and an optional TTL.
 ##
 ## `ttl < 0` uses the cache default, `ttl == 0` never expires.
+##
+## NOTE: Plain (untyped) values only. Floats must use `set_float`: raw
+## floats do not survive maps on some builds, while `set_float` keeps
+## them in fixed-point string form and decodes transparently on read.
 pub function Cache.set(self: Cache, key, value, ttl: int = -1) -> int
     return store_set(self, key, value, ttl)
+end
+
+## Inserts a string value with an optional TTL, tagged for snapshots.
+##
+## Behaves exactly like `set`, but records the `"s"` kind tag so `save`
+## persists the entry. Values written via plain `set` are fully usable
+## but skipped by `save`.
+pub function Cache.set_str(self: Cache, key, value: string, ttl: int = -1) -> int
+    return store_set(self, key, value, ttl, "s")
+end
+
+## Inserts an int value with an optional TTL, tagged for snapshots.
+##
+## Records the `"i"` kind tag so `save` persists the entry.
+pub function Cache.set_int(self: Cache, key, value: int, ttl: int = -1) -> int
+    return store_set(self, key, value, ttl, "i")
+end
+
+## Inserts a float value with an optional TTL, tagged for snapshots.
+##
+## Records the `"f"` kind tag so `save` persists the entry. The value is
+## kept in fixed-point string form internally (raw floats do not survive
+## maps on some builds) and decoded transparently on every read.
+pub function Cache.set_float(self: Cache, key, value: float, ttl: int = -1) -> int
+    return store_set(self, key, snapshot_encode_float(value), ttl, "f")
 end
 
 ## Returns the value for `key`, or null on miss/expiry.
 pub function Cache.get(self: Cache, key)
     return store_get(self, key)
+end
+
+## Returns the value for `key` without affecting recency or counters.
+##
+## Expired entries are still removed eagerly, but no hit/miss is recorded
+## and LRU recency is left untouched. Ideal for inspections and health checks.
+pub function Cache.peek(self: Cache, key)
+    return store_peek(self, key)
+end
+
+## Returns the float value for a `set_float` entry, or null otherwise.
+##
+## Plain `get` on `"f"` entries returns the fixed-point string form;
+## use this for numeric comparison and arithmetic. Wrong-kind and
+## missing keys yield null (counted as misses).
+pub function Cache.get_float(self: Cache, key)
+    return store_get_float(self, key)
 end
 
 ## Returns the value for `key`, or `fallback` on miss/expiry.
@@ -155,6 +211,65 @@ pub function Cache.expire(self: Cache, key, ttl: int) -> int
     return store_expire(self, key, ttl)
 end
 
+## Refreshes recency (and optionally TTL) without changing the value.
+##
+## Returns 1 when `key` is live, 0 when missing/expired. Never touches
+## hit/miss counters. `ttl = -1` keeps the current expiry, `ttl = 0`
+## persists the entry, `ttl > 0` sets a fresh TTL from now. Recency is
+## refreshed for LRU caches only (FIFO/LFU keep original age).
+pub function Cache.touch(self: Cache, key, ttl: int = -1) -> int
+    return store_touch(self, key, ttl)
+end
+
+## Updates the capacity, evicting excess entries when shrinking.
+##
+## `capacity <= 0` means unbounded. Excess entries are evicted oldest-first
+## according to the active policy (FIFO order as fallback for `None`).
+pub function Cache.set_capacity(self: Cache, capacity: int)
+    store_set_capacity(self, capacity)
+end
+
+## Updates the default TTL applied when `set` omits `ttl`.
+##
+## Negative values are normalized to `0` (never expires).
+pub function Cache.set_default_ttl(self: Cache, default_ttl: int)
+    store_set_default_ttl(self, default_ttl)
+end
+
+## Deletes every key starting with `prefix`. Returns removed count.
+##
+## An empty prefix matches all entries (counted clear).
+pub function Cache.delete_by_prefix(self: Cache, prefix: string) -> int
+    let count = 0
+    let plen = len(prefix)
+    let snapshot = store_order_snapshot(self)
+    for k in snapshot
+        let key = "" + k
+        if len(key) >= plen and key[..plen] == prefix
+            if store_delete(self, key) == 1
+                count += 1
+            end
+        end
+    end
+    return count
+end
+
+## Registers a capacity-eviction callback `fn(key, value)`.
+##
+## Fires after an entry is evicted for capacity reasons (never for explicit
+## deletes, TTL expiry, or `clear`). Pass null to unregister.
+pub function Cache.on_evict(self: Cache, cb)
+    self.evict_hook = cb
+end
+
+## Registers an expiry callback `fn(key, value)`.
+##
+## Fires when an entry expires (on read, `has`, `ttl`, `expire`, or `prune`).
+## Pass null to unregister.
+pub function Cache.on_expire(self: Cache, cb)
+    self.expire_hook = cb
+end
+
 ## Inserts all entries from a map with a shared TTL. Returns inserted count.
 ##
 ## NOTE: Iterates `keys(values)` and loops in this frame (see `keys()` note).
@@ -199,6 +314,78 @@ pub function Cache.get_or_insert(self: Cache, key, value, ttl: int = -1)
     return value
 end
 
+## Returns the value for `key`, computing and storing it first on miss.
+##
+## `producer` is a `fn(key)` callback invoked only on miss/expiry; its
+## return value is stored (with `ttl`) and returned. Note: null results
+## are returned but never retained (the next read recomputes).
+pub function Cache.get_or_compute(self: Cache, key, producer, ttl: int = -1)
+    let current = store_get(self, key)
+    if current is not null
+        return current
+    end
+    let produced = producer(key)
+    store_set(self, key, produced, ttl)
+    return produced
+end
+
+## Inserts with TTL jitter to spread expiries and avoid stampedes.
+##
+## Effective TTL is `ttl` plus a deterministic 0..`max_jitter` spread
+## derived from the key and current time. No extra dependencies.
+pub function Cache.set_jittered(self: Cache, key, value, ttl: int, max_jitter: int = 0) -> int
+    let spread = 0
+    if max_jitter > 0 and ttl > 0
+        spread = (time() + len(key) * 7919 + len(self.order) * 31) % (max_jitter + 1)
+    end
+    return store_set(self, key, value, ttl + spread)
+end
+
+## Persists live entries written via typed setters to `path`.
+##
+## Only `set_str`/`set_int`/`set_float` entries carry a kind tag and are
+## persisted (string/int/float); generic `set` values, already-expired
+## entries, and other types are skipped. Format is line-based
+## (`alyacache v1` header, tab-separated fields). Returns the number of
+## entries persisted.
+pub function Cache.save(self: Cache, path: string) -> int
+    let content = snapshot_header()
+    let count = 0
+    let snapshot = store_order_snapshot(self)
+    for k in snapshot
+        let key = "" + k
+        let line = snapshot_line(self, key)
+        if line != ""
+            content = content + "\n" + line
+            count += 1
+        end
+    end
+    fs_write(path, content)
+    return count
+end
+
+## Restores entries from a snapshot file created by `save`.
+##
+## Merges into the current content (existing keys are overwritten).
+## Missing files restore nothing; malformed lines are skipped. Returns
+## the number of entries restored.
+pub function Cache.load(self: Cache, path: string) -> int
+    if fs_exists(path) == 0
+        return 0
+    end
+    let content = fs_read(path)
+    let count = 0
+    for line in split(content, "\n")
+        let parsed = snapshot_parse(line)
+        if parsed is null
+            continue
+        end
+        store_set(self, parsed[0], parsed[1], parsed[2], parsed[3])
+        count += 1
+    end
+    return count
+end
+
 # ───────────────────────────────────────────────────────────────
 # Standalone Facade Functions (functional style)
 # ───────────────────────────────────────────────────────────────
@@ -206,6 +393,21 @@ end
 ## Functional `set` operating on an explicit cache instance.
 pub function cache_set(c: Cache, key, value, ttl: int = -1) -> int
     return store_set(c, key, value, ttl)
+end
+
+## Functional `set_str` operating on an explicit cache instance.
+pub function cache_set_str(c: Cache, key, value: string, ttl: int = -1) -> int
+    return store_set(c, key, value, ttl, "s")
+end
+
+## Functional `set_int` operating on an explicit cache instance.
+pub function cache_set_int(c: Cache, key, value: int, ttl: int = -1) -> int
+    return store_set(c, key, value, ttl, "i")
+end
+
+## Functional `set_float` operating on an explicit cache instance.
+pub function cache_set_float(c: Cache, key, value: float, ttl: int = -1) -> int
+    return store_set(c, key, snapshot_encode_float(value), ttl, "f")
 end
 
 ## Functional `get` operating on an explicit cache instance.
@@ -273,6 +475,122 @@ end
 ## Functional `stats` operating on an explicit cache instance.
 pub function cache_stats(c: Cache) -> CacheStats
     return make_stats(len(c.store), c.capacity, c.hits, c.misses, c.evictions, c.policy)
+end
+
+## Functional `peek` operating on an explicit cache instance.
+pub function cache_peek(c: Cache, key)
+    return store_peek(c, key)
+end
+
+## Functional `get_float` operating on an explicit cache instance.
+pub function cache_get_float(c: Cache, key)
+    return store_get_float(c, key)
+end
+
+## Functional `touch` operating on an explicit cache instance.
+pub function cache_touch(c: Cache, key, ttl: int = -1) -> int
+    return store_touch(c, key, ttl)
+end
+
+## Functional `set_capacity` operating on an explicit cache instance.
+pub function cache_set_capacity(c: Cache, capacity: int)
+    store_set_capacity(c, capacity)
+end
+
+## Functional `set_default_ttl` operating on an explicit cache instance.
+pub function cache_set_default_ttl(c: Cache, default_ttl: int)
+    store_set_default_ttl(c, default_ttl)
+end
+
+## Functional `delete_by_prefix` operating on an explicit cache instance.
+pub function cache_delete_by_prefix(c: Cache, prefix: string) -> int
+    let count = 0
+    let plen = len(prefix)
+    let snapshot = store_order_snapshot(c)
+    for k in snapshot
+        let key = "" + k
+        if len(key) >= plen and key[..plen] == prefix
+            if store_delete(c, key) == 1
+                count += 1
+            end
+        end
+    end
+    return count
+end
+
+## Functional `get_or_insert` operating on an explicit cache instance.
+pub function cache_get_or_insert(c: Cache, key, value, ttl: int = -1)
+    let current = store_get(c, key)
+    if current is not null
+        return current
+    end
+    store_set(c, key, value, ttl)
+    return value
+end
+
+## Functional `get_or_compute` operating on an explicit cache instance.
+pub function cache_get_or_compute(c: Cache, key, producer, ttl: int = -1)
+    let current = store_get(c, key)
+    if current is not null
+        return current
+    end
+    let produced = producer(key)
+    store_set(c, key, produced, ttl)
+    return produced
+end
+
+## Functional `set_jittered` operating on an explicit cache instance.
+pub function cache_set_jittered(c: Cache, key, value, ttl: int, max_jitter: int = 0) -> int
+    let spread = 0
+    if max_jitter > 0 and ttl > 0
+        spread = (time() + len(key) * 7919 + len(c.order) * 31) % (max_jitter + 1)
+    end
+    return store_set(c, key, value, ttl + spread)
+end
+
+## Functional `on_evict` operating on an explicit cache instance.
+pub function cache_on_evict(c: Cache, cb)
+    c.evict_hook = cb
+end
+
+## Functional `on_expire` operating on an explicit cache instance.
+pub function cache_on_expire(c: Cache, cb)
+    c.expire_hook = cb
+end
+
+## Functional `save` operating on an explicit cache instance.
+pub function cache_save(c: Cache, path: string) -> int
+    let content = snapshot_header()
+    let count = 0
+    let snapshot = store_order_snapshot(c)
+    for k in snapshot
+        let key = "" + k
+        let line = snapshot_line(c, key)
+        if line != ""
+            content = content + "\n" + line
+            count += 1
+        end
+    end
+    fs_write(path, content)
+    return count
+end
+
+## Functional `load` operating on an explicit cache instance.
+pub function cache_load(c: Cache, path: string) -> int
+    if fs_exists(path) == 0
+        return 0
+    end
+    let content = fs_read(path)
+    let count = 0
+    for line in split(content, "\n")
+        let parsed = snapshot_parse(line)
+        if parsed is null
+            continue
+        end
+        store_set(c, parsed[0], parsed[1], parsed[2], parsed[3])
+        count += 1
+    end
+    return count
 end
 
 ## Functional `set_many` operating on an explicit cache instance.

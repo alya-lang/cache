@@ -2,7 +2,41 @@
 ## Part of the Alya Language package ecosystem (https://github.com/alya-lang)
 
 import "std/test"
+import "std/fs"
 import "../src/lib.alya" as pkg
+
+# Producer callback for get_or_compute tests (counts invocations).
+let compute_calls = []
+
+function compute_string(key)
+    compute_calls.push(key)
+    return "computed:" + key
+end
+
+# Eviction/expiry hook probes recording fired (key, value) pairs.
+let evicted_keys = []
+let evicted_vals = []
+let expired_keys = []
+let expired_vals = []
+
+function on_evict_probe(key, value)
+    evicted_keys.push(key)
+    evicted_vals.push(value)
+    return 1
+end
+
+function on_expire_probe(key, value)
+    expired_keys.push(key)
+    expired_vals.push(value)
+    return 1
+end
+
+# Backdates one entry's expiry for deterministic expiry tests (no sleep).
+function force_expire(c, key)
+    let m = c.meta[key]
+    m.expires_at = time() - 1
+    c.meta[key] = m
+end
 
 function main()
     test_suite("cache Test Suite")
@@ -224,6 +258,202 @@ function main()
     for mk in mixed_keys
         runner_assert_eq(r, mixed.has(mk), 1, "mixed snapshot key is usable")
     end
+
+    # ═══════════════════════════════════════════════════════════
+    # 10. LFU Eviction
+    # ═══════════════════════════════════════════════════════════
+    runner_assert_eq(r, pkg::EvictionPolicy.LFU, 3, "EvictionPolicy.LFU == 3")
+    let lfu_opts = pkg::options_lfu(2, 0)
+    runner_assert_eq(r, lfu_opts.policy, 3, "options_lfu sets LFU policy")
+
+    let lfu = pkg::lfu_cache(2, 0)
+    lfu.set("a", 1)
+    lfu.set("b", 2)
+    lfu.get("a")
+    lfu.get("a")
+    lfu.set("c", 3)
+    runner_assert_eq(r, lfu.has("b"), 0, "LFU evicts least-frequently-used key")
+    runner_assert_eq(r, lfu.has("a"), 1, "LFU keeps frequently read key")
+    runner_assert_eq(r, lfu.has("c"), 1, "LFU keeps newest key")
+    runner_assert_eq(r, lfu.evictions, 1, "LFU counts one eviction")
+
+    # LFU tie breaks by age (oldest first)
+    let lfu2 = pkg::lfu_cache(2, 0)
+    lfu2.set("old", 1)
+    lfu2.set("new", 2)
+    lfu2.set("third", 3)
+    runner_assert_eq(r, lfu2.has("old"), 0, "LFU tie evicts oldest key")
+    runner_assert_eq(r, lfu2.has("new"), 1, "LFU tie keeps newer key")
+
+    # ═══════════════════════════════════════════════════════════
+    # 11. Peek (no recency, no counters)
+    # ═══════════════════════════════════════════════════════════
+    let peekc = pkg::lru_cache(2, 0)
+    peekc.set("a", 1)
+    peekc.set("b", 2)
+    runner_assert_eq(r, peekc.peek("a"), 1, "peek returns live value")
+    let hits_before = peekc.hits
+    runner_assert_eq(r, peekc.peek("a"), 1, "peek again returns value")
+    runner_assert_eq(r, peekc.hits, hits_before, "peek does not record hits")
+    runner_assert_true(r, peekc.peek("ghost") is null, "peek on missing key is null")
+    peekc.set("c", 3)
+    runner_assert_eq(r, peekc.has("a"), 0, "peek does not refresh LRU recency")
+    runner_assert_eq(r, peekc.has("b"), 1, "unpeeked key survives")
+
+    # ═══════════════════════════════════════════════════════════
+    # 12. Touch (recency + optional TTL, no counters)
+    # ═══════════════════════════════════════════════════════════
+    let touchc = pkg::lru_cache(2, 0)
+    touchc.set("a", 1)
+    touchc.set("b", 2)
+    runner_assert_eq(r, touchc.touch("a"), 1, "touch returns 1 for live key")
+    touchc.set("c", 3)
+    runner_assert_eq(r, touchc.has("a"), 1, "touch refreshes LRU recency")
+    runner_assert_eq(r, touchc.has("b"), 0, "untouched key evicted")
+    runner_assert_eq(r, touchc.touch("ghost"), 0, "touch returns 0 for missing key")
+
+    touchc.set("t", "v")
+    runner_assert_eq(r, touchc.touch("t", 3600), 1, "touch with ttl succeeds")
+    runner_assert_true(r, touchc.ttl("t") > 0, "touch applies fresh TTL")
+    runner_assert_eq(r, touchc.touch("t", 0), 1, "touch persist succeeds")
+    runner_assert_eq(r, touchc.ttl("t"), 0, "touch to 0 persists entry")
+
+    # ═══════════════════════════════════════════════════════════
+    # 13. Runtime Reconfiguration
+    # ═══════════════════════════════════════════════════════════
+    let resizec = pkg::fifo_cache(4, 0)
+    resizec.set("a", 1)
+    resizec.set("b", 2)
+    resizec.set("c", 3)
+    resizec.set("d", 4)
+    resizec.set_capacity(2)
+    runner_assert_eq(r, resizec.size(), 2, "shrink evicts down to capacity")
+    runner_assert_eq(r, resizec.has("a"), 0, "shrink evicts oldest first")
+    runner_assert_eq(r, resizec.has("b"), 0, "shrink evicts second oldest")
+    runner_assert_eq(r, resizec.has("c"), 1, "shrink keeps newest")
+    resizec.set_capacity(10)
+    resizec.set("e", 5)
+    runner_assert_eq(r, resizec.size(), 3, "grow allows new entries")
+    resizec.set_capacity(0)
+    let gi = 0
+    while gi < 30
+        resizec.set("g{gi}", gi)
+        gi += 1
+    end
+    runner_assert_eq(r, resizec.size(), 33, "capacity 0 is unbounded")
+
+    let ttlc2 = pkg::new_cache(8, 0)
+    ttlc2.set_default_ttl(3600)
+    ttlc2.set("auto", "v")
+    runner_assert_true(r, ttlc2.ttl("auto") > 0, "new default_ttl applies to set")
+    ttlc2.set_default_ttl(-5)
+    ttlc2.set("plain", "v")
+    runner_assert_eq(r, ttlc2.ttl("plain"), 0, "negative default_ttl normalizes to persist")
+
+    # ═══════════════════════════════════════════════════════════
+    # 14. Delete by Prefix
+    # ═══════════════════════════════════════════════════════════
+    let prefc = pkg::new_cache(16, 0)
+    prefc.set("user:1", "a")
+    prefc.set("user:2", "b")
+    prefc.set("order:1", "c")
+    runner_assert_eq(r, prefc.delete_by_prefix("user:"), 2, "prefix delete removes 2")
+    runner_assert_eq(r, prefc.has("user:1"), 0, "prefixed key gone")
+    runner_assert_eq(r, prefc.has("order:1"), 1, "other key kept")
+    runner_assert_eq(r, prefc.delete_by_prefix("nope:"), 0, "no-match prefix removes 0")
+    runner_assert_eq(r, prefc.delete_by_prefix(""), 1, "empty prefix clears all")
+
+    # ═══════════════════════════════════════════════════════════
+    # 15. Get or Compute (producer callback)
+    # ═══════════════════════════════════════════════════════════
+    let compc = pkg::new_cache(8, 0)
+    runner_assert_str_eq(r, compc.get_or_compute("k", compute_string), "computed:k", "compute on miss stores result")
+    runner_assert_eq(r, len(compute_calls), 1, "producer called exactly once on miss")
+    runner_assert_str_eq(r, compc.get_or_compute("k", compute_string), "computed:k", "compute on hit returns cached")
+    runner_assert_eq(r, len(compute_calls), 1, "producer not called again on hit")
+
+    # ═══════════════════════════════════════════════════════════
+    # 16. TTL Jitter
+    # ═══════════════════════════════════════════════════════════
+    let jitc = pkg::new_cache(16, 0)
+    jitc.set_jittered("j", "v", 100, 20)
+    let jttl = jitc.ttl("j")
+    runner_assert_true(r, jttl >= 100 and jttl <= 120, "jittered ttl within [ttl, ttl+max]")
+    jitc.set_jittered("p", "v", 0, 20)
+    runner_assert_eq(r, jitc.ttl("p"), 0, "jitter on persist stays persist")
+
+    # ═══════════════════════════════════════════════════════════
+    # 17. Eviction & Expiry Hooks
+    # ═══════════════════════════════════════════════════════════
+    let hookc = pkg::lru_cache(2, 0)
+    hookc.on_evict(on_evict_probe)
+    hookc.on_expire(on_expire_probe)
+    hookc.set("a", "va")
+    hookc.set("b", "vb")
+    hookc.set("c", "vc")
+    runner_assert_eq(r, len(evicted_keys), 1, "evict hook fired once")
+    runner_assert_str_eq(r, evicted_keys[0], "a", "evict hook reports key")
+    runner_assert_str_eq(r, evicted_vals[0], "va", "evict hook reports value")
+    hookc.delete("b")
+    runner_assert_eq(r, len(evicted_keys), 1, "explicit delete does not fire evict hook")
+
+    hookc.set("temp", "gone", 3600)
+    force_expire(hookc, "temp")
+    let tg = hookc.get("temp")
+    runner_assert_true(r, tg is null, "forced-expired entry reads null")
+    runner_assert_eq(r, len(expired_keys), 1, "expire hook fired once")
+    runner_assert_str_eq(r, expired_keys[0], "temp", "expire hook reports key")
+    runner_assert_str_eq(r, expired_vals[0], "gone", "expire hook reports value")
+
+    # ═══════════════════════════════════════════════════════════
+    # 18. Snapshot Save / Load (typed setters)
+    # ═══════════════════════════════════════════════════════════
+    let snapc = pkg::new_cache(16, 0)
+    snapc.set_str("name", "Ada")
+    snapc.set_int("age", 36)
+    snapc.set_float("pi", 3.5)
+    snapc.set_str("tricky", "a\tb\nc\\d")
+    snapc.set_str("temp", "x", 3600)
+    snapc.set("skipme", [1, 2])
+    snapc.set("alsoskip", "generic")
+    let saved = snapc.save("test-snapshot.tmp")
+    runner_assert_eq(r, saved, 5, "save persists 5 typed entries (generic/array skipped)")
+
+    let backc = pkg::new_cache(16, 0)
+    let loaded = backc.load("test-snapshot.tmp")
+    runner_assert_eq(r, loaded, 5, "load restores 5 entries")
+    runner_assert_str_eq(r, backc.get("name"), "Ada", "string round-trips")
+    runner_assert_eq(r, backc.get("age"), 36, "int round-trips")
+    runner_assert_true(r, backc.get_float("pi") == 3.5, "float round-trips via get_float")
+    runner_assert_str_eq(r, backc.get("pi"), "3.500000", "raw float form is fixed-point string")
+    runner_assert_str_eq(r, backc.get("tricky"), "a\tb\nc\\d", "escapes round-trip")
+    runner_assert_true(r, backc.ttl("temp") > 0, "ttl round-trips")
+    runner_assert_eq(r, backc.load("no-such-file.tmp"), 0, "load of missing file restores 0")
+    fs_remove("test-snapshot.tmp")
+
+    # ═══════════════════════════════════════════════════════════
+    # 19. Edge Cases
+    # ═══════════════════════════════════════════════════════════
+    let tiny = pkg::lru_cache(1, 0)
+    tiny.set("a", 1)
+    tiny.set("b", 2)
+    runner_assert_eq(r, tiny.has("a"), 0, "capacity 1 evicts on second insert")
+    runner_assert_eq(r, tiny.get("b"), 2, "capacity 1 keeps newest")
+
+    let over = pkg::new_cache(8, 3600)
+    over.set("k", "v", 3600)
+    over.set("k", "v2")
+    runner_assert_eq(r, over.ttl("k"), 3600, "overwrite without ttl keeps default_ttl")
+
+    let persist_over = pkg::new_cache(8, 0)
+    persist_over.set("k", "v", 3600)
+    persist_over.set("k", "v2")
+    runner_assert_eq(r, persist_over.ttl("k"), 0, "overwrite resets to persist when no default")
+
+    let edge = pkg::new_cache(8, 0)
+    edge.set("gone", "x", 3600)
+    force_expire(edge, "gone")
+    runner_assert_eq(r, len(edge.keys()), 0, "keys() prunes expired entries")
 
     let failed = runner_summary(r)
     if failed > 0

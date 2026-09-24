@@ -13,10 +13,12 @@
 ## - `None` keeps all entries (unbounded growth, capacity ignored).
 ## - `LRU` evicts the least-recently-used key (reads refresh recency).
 ## - `FIFO` evicts the oldest-inserted key (reads do not refresh recency).
+## - `LFU` evicts the least-frequently-used key (ties break by age, oldest first).
 pub enum EvictionPolicy
     None = 0,
     LRU = 1,
-    FIFO = 2
+    FIFO = 2,
+    LFU = 3
 end
 
 # ───────────────────────────────────────────────────────────────
@@ -37,21 +39,22 @@ end
 
 ## Per-entry metadata holding expiry and usage counters.
 ##
-## NOTE: All fields are statically typed (`int`). User values are NEVER
-## stored in struct fields: an untyped struct field holding mixed value
-## types (string + int across instances) miscompiles on some builds and
-## corrupts reads globally. Values live directly in the `store` map
-## (maps handle mixed `any` values correctly); only typed metadata lives
-## here.
+## NOTE: All fields are statically typed. User values are NEVER stored in
+## struct fields: an untyped struct field holding mixed value types
+## (string + int across instances) miscompiles on some builds and corrupts
+## reads globally. Values live directly in the `store` map (maps handle
+## mixed `any` values correctly); only typed metadata lives here.
 ##
 ## ### Fields
 ## - `expires_at`: Unix epoch seconds when the entry expires (`0` = never).
 ## - `inserted_at`: Unix epoch seconds when the entry was written.
 ## - `entry_hits`: Number of successful reads served from this entry.
+## - `kind`: Value kind tag for snapshots (`"s"`/`"i"`/`"f"`, `""` = unknown).
 pub struct CacheMeta
     expires_at: int,
     inserted_at: int,
-    entry_hits: int
+    entry_hits: int,
+    kind: string
 end
 
 ## In-memory cache container with storage, recency order, and counters.
@@ -66,6 +69,8 @@ end
 ## - `hits`: Lifetime successful reads.
 ## - `misses`: Lifetime failed reads (missing or expired keys).
 ## - `evictions`: Lifetime capacity evictions performed.
+## - `evict_hook`: Capacity-eviction callback `fn(key, value)` or null.
+## - `expire_hook`: Expiry callback `fn(key, value)` or null.
 pub struct Cache
     store: map,
     meta: map,
@@ -75,7 +80,9 @@ pub struct Cache
     policy: int,
     hits: int,
     misses: int,
-    evictions: int
+    evictions: int,
+    evict_hook,
+    expire_hook
 end
 
 ## Point-in-time snapshot of cache utilization and efficiency.
@@ -140,6 +147,11 @@ pub function options_fifo(capacity: int = 128, default_ttl: int = 0) -> CacheOpt
     return options_new(capacity, default_ttl, EvictionPolicy.FIFO)
 end
 
+## Creates LFU options with the given capacity and optional default TTL.
+pub function options_lfu(capacity: int = 128, default_ttl: int = 0) -> CacheOptions
+    return options_new(capacity, default_ttl, EvictionPolicy.LFU)
+end
+
 ## Creates unbounded options (no eviction) with an optional default TTL.
 pub function options_unbounded(default_ttl: int = 0) -> CacheOptions
     return options_new(0, default_ttl, EvictionPolicy.None)
@@ -149,10 +161,11 @@ end
 ##
 ## ### Parameters
 ## - `ttl`: TTL seconds (`0` = never expires, `< 0` is normalized to `0` here).
+## - `kind`: Value kind tag (`"s"`/`"i"`/`"f"`, `""` = unknown/unsnapshotted).
 ##
 ## ### Returns
 ## Initialized `CacheMeta` instance.
-pub function meta_new(ttl: int = 0) -> CacheMeta
+pub function meta_new(ttl: int = 0, kind: string = "") -> CacheMeta
     let now = time()
     let expires = 0
     if ttl > 0
@@ -161,7 +174,8 @@ pub function meta_new(ttl: int = 0) -> CacheMeta
     return CacheMeta {
         expires_at: expires,
         inserted_at: now,
-        entry_hits: 0
+        entry_hits: 0,
+        kind: kind
     }
 end
 
@@ -184,7 +198,9 @@ pub function cache_new(capacity: int = 128, default_ttl: int = 0, policy: int = 
         policy: policy,
         hits: 0,
         misses: 0,
-        evictions: 0
+        evictions: 0,
+        evict_hook: null,
+        expire_hook: null
     }
 end
 
