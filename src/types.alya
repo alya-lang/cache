@@ -1,434 +1,289 @@
 ## cache Types & Data Structures
 ##
 ## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
-## Defines configuration models, enumerations, structural interfaces, and associated methods
-## showcasing the full range of modern Alya type system capabilities.
-
-# ───────────────────────────────────────────────────────────────
-# Structural Interfaces (Duck Typing)
-# ───────────────────────────────────────────────────────────────
-
-## Public interface for objects capable of producing a formatted string summary.
-##
-## Any struct implementing a `summary(self) -> string` method implicitly
-## satisfies this interface via Alya's structural duck-typing runtime.
-pub interface Summarizable
-    function summary(self) -> string
-end
-
-## Public interface for objects that provide detailed status descriptions and validation.
-##
-## Structs implementing `describe(self) -> string` and `is_valid(self) -> int`
-## satisfy this contract without explicit inheritance declarations.
-pub interface Describable
-    function describe(self) -> string
-    function is_valid(self) -> int
-end
+## Defines eviction policies, options, entries, cache container, and statistics
+## for a high-performance in-memory cache with LRU/FIFO eviction and TTL expiry.
 
 # ───────────────────────────────────────────────────────────────
 # Enumerations
 # ───────────────────────────────────────────────────────────────
 
-## Public enumeration of entity lifecycle status states.
+## Eviction policy applied when the cache reaches capacity.
 ##
-## Defines sequential status codes from pending to completed or error states.
-pub enum CacheStatus
-    Pending = 0,
-    Active = 1,
-    Archived = 2,
-    Error = 3
-end
-
-## Public enumeration of operational priority levels.
-##
-## Used to determine dispatch scheduling, queue ordering, and urgency tiers.
-pub enum CachePriority
-    Low = 0,
-    Normal = 1,
-    High = 2,
-    Critical = 3
-end
-
-## Public enumeration of greeting and presentation styles.
-##
-## Governs formatting salutations, prefixes, and stylistic tone.
-pub enum CacheStyle
-    Standard = 0,
-    Formal = 1,
-    Casual = 2
+## - `None` keeps all entries (unbounded growth, capacity ignored).
+## - `LRU` evicts the least-recently-used key (reads refresh recency).
+## - `FIFO` evicts the oldest-inserted key (reads do not refresh recency).
+pub enum EvictionPolicy
+    None = 0,
+    LRU = 1,
+    FIFO = 2
 end
 
 # ───────────────────────────────────────────────────────────────
 # Data Models (Structs)
 # ───────────────────────────────────────────────────────────────
 
-## Configuration data model holding execution parameters and metadata.
-##
-## Encapsulates target identity, counter thresholds, priority tier, stylistic
-## mode, active status flag, and associated classification tags.
+## Configuration options for cache construction.
 ##
 ## ### Fields
-## - `name`: Validated entity identifier string.
-## - `count`: Repetition limit or processing counter.
-## - `priority`: Operational priority level (`CachePriority` enum value).
-## - `style`: Presentation style variant (`CacheStyle` enum value).
-## - `enabled`: Activation flag (1 for active, 0 for inactive).
-## - `tags`: Categorical metadata tags array.
-pub struct CacheConfig
-    name: string,
-    count: int,
-    priority: int,
-    style: int,
-    enabled: int,
-    tags: array
+## - `capacity`: Maximum entry count before eviction (`<= 0` means unbounded).
+## - `default_ttl`: Default time-to-live in seconds (`0` means no expiry).
+## - `policy`: `EvictionPolicy` variant integer.
+pub struct CacheOptions
+    capacity: int,
+    default_ttl: int,
+    policy: int
 end
 
-## Container representing the outcome of an operation.
+## Per-entry metadata holding expiry and usage counters.
 ##
-## Holds an optional payload value, numeric status code, informational message,
-## and accumulated error diagnostic messages.
+## NOTE: All fields are statically typed (`int`). User values are NEVER
+## stored in struct fields: an untyped struct field holding mixed value
+## types (string + int across instances) miscompiles on some builds and
+## corrupts reads globally. Values live directly in the `store` map
+## (maps handle mixed `any` values correctly); only typed metadata lives
+## here.
 ##
 ## ### Fields
-## - `value`: Result payload (any type, or null on failure).
-## - `status`: Outcome code (0 for success, non-zero for errors).
-## - `message`: Human-readable summary or error explanation.
-## - `errors`: Diagnostic error messages array.
-pub struct CacheResult
-    value,
-    status: int,
-    message: string,
-    errors: array
+## - `expires_at`: Unix epoch seconds when the entry expires (`0` = never).
+## - `inserted_at`: Unix epoch seconds when the entry was written.
+## - `entry_hits`: Number of successful reads served from this entry.
+pub struct CacheMeta
+    expires_at: int,
+    inserted_at: int,
+    entry_hits: int
 end
 
-## Aggregated run statistics tracking test, processing, or batch metrics.
-##
-## Records total observed items, successes, failures, and skipped items.
+## In-memory cache container with storage, recency order, and counters.
 ##
 ## ### Fields
-## - `total`: Total processed items count.
-## - `passed`: Succeeded items count.
-## - `failed`: Failed items count.
-## - `skipped`: Skipped items count.
+## - `store`: Internal key -> value map (user payloads, any type).
+## - `meta`: Internal key -> `CacheMeta` map (expiry and hit counters).
+## - `order`: Recency/insertion order of keys (front = eviction candidate).
+## - `capacity`: Maximum entry count (`<= 0` means unbounded).
+## - `default_ttl`: Default TTL in seconds applied when `set` omits `ttl`.
+## - `policy`: `EvictionPolicy` variant integer.
+## - `hits`: Lifetime successful reads.
+## - `misses`: Lifetime failed reads (missing or expired keys).
+## - `evictions`: Lifetime capacity evictions performed.
+pub struct Cache
+    store: map,
+    meta: map,
+    order: array,
+    capacity: int,
+    default_ttl: int,
+    policy: int,
+    hits: int,
+    misses: int,
+    evictions: int
+end
+
+## Point-in-time snapshot of cache utilization and efficiency.
+##
+## ### Fields
+## - `size`: Current live entry count.
+## - `capacity`: Configured maximum (`<= 0` means unbounded).
+## - `hits`: Lifetime successful reads.
+## - `misses`: Lifetime failed reads.
+## - `evictions`: Lifetime capacity evictions.
+## - `policy`: Active `EvictionPolicy` variant integer.
 pub struct CacheStats
-    total: int,
-    passed: int,
-    failed: int,
-    skipped: int
+    size: int,
+    capacity: int,
+    hits: int,
+    misses: int,
+    evictions: int,
+    policy: int
 end
 
 # ───────────────────────────────────────────────────────────────
-# Private Helper Functions
+# Private Helpers
 # ───────────────────────────────────────────────────────────────
 
-# Internal sanitizer ensuring a non-empty, non-null string fallback.
-function sanitize_text_internal(text, fallback: string) -> string
-    return when
-        text is null => fallback
-        text == ""   => fallback
-        else         => text
-    end
-end
-
-# Formats integer division as a percentage string, clamping denominator zero.
-function format_percent_internal(passed: int, total: int) -> string
+# Formats hits/total as a percentage string, guarding divide-by-zero.
+function format_hit_rate_internal(hits: int, total: int) -> string
     if total <= 0
         return "0%"
     end
-    let pct = (passed * 100) / total
+    let pct = (hits * 100) / total
     return "{pct}%"
 end
 
 # ───────────────────────────────────────────────────────────────
-# Public Sanitization and Factory Constructors
+# Factory Constructors
 # ───────────────────────────────────────────────────────────────
 
-## Validates and sanitizes a candidate name string.
-##
-## Replaces null or empty strings with the default `"World"` fallback.
+## Creates cache options with explicit capacity, TTL, and policy.
 ##
 ## ### Parameters
-## - `name`: The candidate name value to sanitize.
+## - `capacity`: Maximum entries (`<= 0` means unbounded). Defaults to `128`.
+## - `default_ttl`: Default TTL seconds (`0` = no expiry). Defaults to `0`.
+## - `policy`: `EvictionPolicy` variant. Defaults to `EvictionPolicy.LRU`.
 ##
 ## ### Returns
-## The validated string value, or `"World"` if empty or null.
-##
-## ### Examples
-## ```alya
-## let clean = sanitize_name(null) # "World"
-## let user = sanitize_name("Alice") # "Alice"
-## ```
-pub function sanitize_name(name) -> string
-    return sanitize_text_internal(name, "World")
-end
-
-## Factory constructor creating a validated `CacheConfig` instance.
-##
-## Sanitizes the input name and sets sensible defaults for optional fields.
-##
-## ### Parameters
-## - `name`: Entity identifier name. Defaults to `"World"`.
-## - `count`: Counter or repetition limit. Defaults to `1`.
-## - `priority`: Priority tier. Defaults to `CachePriority.Normal`.
-## - `style`: Presentation style variant. Defaults to `CacheStyle.Standard`.
-## - `enabled`: Active flag. Defaults to `1`.
-## - `tags`: Categorization tags array. Defaults to `[]`.
-##
-## ### Returns
-## A fully initialized `CacheConfig` instance.
-##
-## ### Examples
-## ```alya
-## let cfg = make_config("Alice", 3, CachePriority.High)
-## ```
-pub function make_config(name = "World", count: int = 1, priority: int = CachePriority.Normal, style: int = CacheStyle.Standard, enabled: int = 1, tags: array = []) -> CacheConfig
-    let valid_name = sanitize_name(name)
-    return CacheConfig {
-        name: valid_name,
-        count: count,
-        priority: priority,
-        style: style,
-        enabled: enabled,
-        tags: tags
+## Initialized `CacheOptions` instance.
+pub function options_new(capacity: int = 128, default_ttl: int = 0, policy: int = EvictionPolicy.LRU) -> CacheOptions
+    return CacheOptions {
+        capacity: capacity,
+        default_ttl: default_ttl,
+        policy: policy
     }
 end
 
-## Factory constructor creating a successful `CacheResult`.
-##
-## ### Parameters
-## - `value`: The success payload to encapsulate.
-## - `message`: Descriptive success message string. Defaults to `"OK"`.
-##
-## ### Returns
-## A `CacheResult` with status `0` and empty errors array.
-##
-## ### Examples
-## ```alya
-## let res = ok_result("Processed data", "Success")
-## ```
-pub function ok_result(value, message: string = "OK") -> CacheResult
-    return CacheResult {
-        value: value,
-        status: 0,
-        message: message,
-        errors: []
-    }
+## Creates LRU options with the given capacity and optional default TTL.
+pub function options_lru(capacity: int = 128, default_ttl: int = 0) -> CacheOptions
+    return options_new(capacity, default_ttl, EvictionPolicy.LRU)
 end
 
-## Factory constructor creating a failed `CacheResult`.
-##
-## ### Parameters
-## - `message`: Descriptive error message string.
-## - `errors`: Diagnostic error details array. Defaults to `[]`.
-##
-## ### Returns
-## A `CacheResult` with status `1` and null value payload.
-##
-## ### Examples
-## ```alya
-## let err = error_result("Validation failed", ["Name is missing"])
-## ```
-pub function error_result(message: string, errors: array = []) -> CacheResult
-    return CacheResult {
-        value: null,
-        status: 1,
-        message: message,
-        errors: errors
-    }
+## Creates FIFO options with the given capacity and optional default TTL.
+pub function options_fifo(capacity: int = 128, default_ttl: int = 0) -> CacheOptions
+    return options_new(capacity, default_ttl, EvictionPolicy.FIFO)
 end
 
-## Factory constructor creating a `CacheStats` metric record.
-##
-## ### Parameters
-## - `total`: Total observed items count.
-## - `passed`: Succeeded items count.
-## - `failed`: Failed items count.
-## - `skipped`: Skipped items count. Defaults to `0`.
-##
-## ### Returns
-## A populated `CacheStats` record.
-##
-## ### Examples
-## ```alya
-## let stats = make_stats(100, 95, 5, 0)
-## ```
-pub function make_stats(total: int, passed: int, failed: int, skipped: int = 0) -> CacheStats
-    return CacheStats {
-        total: total,
-        passed: passed,
-        failed: failed,
-        skipped: skipped
-    }
+## Creates unbounded options (no eviction) with an optional default TTL.
+pub function options_unbounded(default_ttl: int = 0) -> CacheOptions
+    return options_new(0, default_ttl, EvictionPolicy.None)
 end
 
-# ───────────────────────────────────────────────────────────────
-# Struct Methods: CacheConfig
-# ───────────────────────────────────────────────────────────────
-
-## Returns a formatted single-line string summary of this configuration.
-##
-## Implicitly satisfies the `Summarizable` interface.
+## Creates cache metadata stamped with the current time.
 ##
 ## ### Parameters
-## - `self`: The target `CacheConfig` instance.
+## - `ttl`: TTL seconds (`0` = never expires, `< 0` is normalized to `0` here).
 ##
 ## ### Returns
-## Formatted summary string in the form `"{name} (count: {count}, enabled: {enabled})"`.
-pub function CacheConfig.summary(self: CacheConfig) -> string
-    let active_str = when self.enabled
-        is 1 => "active"
-        else => "disabled"
+## Initialized `CacheMeta` instance.
+pub function meta_new(ttl: int = 0) -> CacheMeta
+    let now = time()
+    let expires = 0
+    if ttl > 0
+        expires = now + ttl
     end
-    return "{self.name} (count: {self.count}, {active_str})"
+    return CacheMeta {
+        expires_at: expires,
+        inserted_at: now,
+        entry_hits: 0
+    }
 end
 
-## Returns a detailed multi-attribute description of this configuration.
-##
-## Implicitly satisfies the `Describable` interface.
+## Creates a cache container with explicit settings.
 ##
 ## ### Parameters
-## - `self`: The target `CacheConfig` instance.
+## - `capacity`: Maximum entries (`<= 0` means unbounded). Defaults to `128`.
+## - `default_ttl`: Default TTL seconds. Defaults to `0` (no expiry).
+## - `policy`: `EvictionPolicy` variant. Defaults to `EvictionPolicy.LRU`.
 ##
 ## ### Returns
-## Detailed descriptive string including priority and style codes.
-pub function CacheConfig.describe(self: CacheConfig) -> string
-    return "[Config] name={self.name}, count={self.count}, priority={self.priority}, style={self.style}"
+## Empty, initialized `Cache` instance.
+pub function cache_new(capacity: int = 128, default_ttl: int = 0, policy: int = EvictionPolicy.LRU) -> Cache
+    return Cache {
+        store: map(),
+        meta: map(),
+        order: [],
+        capacity: capacity,
+        default_ttl: default_ttl,
+        policy: policy,
+        hits: 0,
+        misses: 0,
+        evictions: 0
+    }
 end
 
-## Validates whether this configuration conforms to essential operational constraints.
+## Creates a cache container from a `CacheOptions` instance.
+pub function cache_with_options(opts: CacheOptions) -> Cache
+    return cache_new(opts.capacity, opts.default_ttl, opts.policy)
+end
+
+## Builds a `CacheStats` snapshot record.
+pub function make_stats(size: int, capacity: int, hits: int, misses: int, evictions: int, policy: int = EvictionPolicy.LRU) -> CacheStats
+    return CacheStats {
+        size: size,
+        capacity: capacity,
+        hits: hits,
+        misses: misses,
+        evictions: evictions,
+        policy: policy
+    }
+end
+
+# ───────────────────────────────────────────────────────────────
+# Struct Methods: CacheMeta
+# ───────────────────────────────────────────────────────────────
+
+## Returns 1 when this entry is expired at the current time, 0 otherwise.
 ##
-## Implicitly satisfies the `Describable` interface.
-##
-## ### Parameters
-## - `self`: The target `CacheConfig` instance.
-##
-## ### Returns
-## `1` if valid (non-empty name and count >= 0), `0` otherwise.
-pub function CacheConfig.is_valid(self: CacheConfig) -> int
-    if self.name == "" or self.count < 0
+## Entries with `expires_at == 0` never expire.
+pub function CacheMeta.is_expired(self: CacheMeta) -> int
+    if self.expires_at == 0
+        return 0
+    end
+    if time() >= self.expires_at
+        return 1
+    end
+    return 0
+end
+
+## Returns 1 when this entry is live (not expired), 0 otherwise.
+pub function CacheMeta.is_alive(self: CacheMeta) -> int
+    if self.is_expired() == 1
         return 0
     end
     return 1
 end
 
-## Returns 1 if this configuration is enabled, 0 otherwise.
-##
-## ### Parameters
-## - `self`: The target `CacheConfig` instance.
-##
-## ### Returns
-## `1` when enabled, `0` when disabled.
-pub function CacheConfig.is_enabled(self: CacheConfig) -> int
-    return self.enabled
-end
-
-## Returns a new configuration copy with an updated name.
-##
-## ### Parameters
-## - `self`: The current `CacheConfig` instance.
-## - `new_name`: The replacement name string.
-##
-## ### Returns
-## A new `CacheConfig` instance with updated name.
-pub function CacheConfig.with_name(self: CacheConfig, new_name) -> CacheConfig
-    return CacheConfig {
-        name: sanitize_name(new_name),
-        count: self.count,
-        priority: self.priority,
-        style: self.style,
-        enabled: self.enabled,
-        tags: self.tags
-    }
-end
-
-## Returns a new configuration copy with an updated priority level.
-##
-## ### Parameters
-## - `self`: The current `CacheConfig` instance.
-## - `new_priority`: New priority level from `CachePriority`.
-##
-## ### Returns
-## A new `CacheConfig` instance with updated priority.
-pub function CacheConfig.with_priority(self: CacheConfig, new_priority: int) -> CacheConfig
-    return CacheConfig {
-        name: self.name,
-        count: self.count,
-        priority: new_priority,
-        style: self.style,
-        enabled: self.enabled,
-        tags: self.tags
-    }
-end
-
-# ───────────────────────────────────────────────────────────────
-# Struct Methods: CacheResult
-# ───────────────────────────────────────────────────────────────
-
-## Returns 1 if this result represents a successful operation.
-##
-## ### Parameters
-## - `self`: The target `CacheResult` instance.
-##
-## ### Returns
-## `1` when status is `0`, `0` otherwise.
-pub function CacheResult.is_ok(self: CacheResult) -> int
-    if self.status == 0
-        return 1
+## Returns remaining TTL seconds (`0` means never expires, `0` when elapsed).
+pub function CacheMeta.ttl_remaining(self: CacheMeta) -> int
+    if self.expires_at == 0
+        return 0
     end
-    return 0
-end
-
-## Returns 1 if this result represents an error condition.
-##
-## ### Parameters
-## - `self`: The target `CacheResult` instance.
-##
-## ### Returns
-## `1` when status is non-zero, `0` when status is `0`.
-pub function CacheResult.is_error(self: CacheResult) -> int
-    if self.status != 0
-        return 1
+    let left = self.expires_at - time()
+    if left < 0
+        return 0
     end
-    return 0
-end
-
-## Unwraps the result's message string, or returns a fallback string on error.
-##
-## ### Parameters
-## - `self`: The target `CacheResult` instance.
-## - `fallback`: Alternative string returned if this result represents an error.
-##
-## ### Returns
-## `message` on success, or `fallback` on error.
-pub function CacheResult.unwrap_or(self: CacheResult, fallback: string) -> string
-    if self.status == 0
-        return self.message
-    end
-    return fallback
+    return left
 end
 
 # ───────────────────────────────────────────────────────────────
 # Struct Methods: CacheStats
 # ───────────────────────────────────────────────────────────────
 
-## Returns the total number of checked items (passed + failed).
-##
-## ### Parameters
-## - `self`: The target `CacheStats` instance.
-##
-## ### Returns
-## Integer sum of passed and failed items.
-pub function CacheStats.total_checked(self: CacheStats) -> int
-    return self.passed + self.failed
+## Returns total read requests (`hits + misses`).
+pub function CacheStats.total_requests(self: CacheStats) -> int
+    return self.hits + self.misses
 end
 
-## Computes and returns the success rate percentage as a formatted string.
-##
-## ### Parameters
-## - `self`: The target `CacheStats` instance.
-##
-## ### Returns
-## Formatted percentage string (e.g. `"90%"`).
-pub function CacheStats.success_rate(self: CacheStats) -> string
-    let checked = self.passed + self.failed
-    return format_percent_internal(self.passed, checked)
+## Returns hit-rate percentage string (e.g. `"80%"`, `"0%"` when no traffic).
+pub function CacheStats.hit_rate(self: CacheStats) -> string
+    return format_hit_rate_internal(self.hits, self.hits + self.misses)
+end
+
+## Returns one-line human-readable summary of this snapshot.
+pub function CacheStats.summary(self: CacheStats) -> string
+    return "[Cache] size={self.size}, hits={self.hits}, misses={self.misses}, evictions={self.evictions}, hit_rate={self.hit_rate()}"
+end
+
+# ───────────────────────────────────────────────────────────────
+# Struct Methods: Cache (introspection only; mutation lives in store/lib)
+# ───────────────────────────────────────────────────────────────
+
+## Returns current live entry count (includes expired-but-unpruned entries).
+pub function Cache.len(self: Cache) -> int
+    return len(self.store)
+end
+
+## Returns 1 when the cache holds no entries, 0 otherwise.
+pub function Cache.is_empty(self: Cache) -> int
+    if len(self.store) == 0
+        return 1
+    end
+    return 0
+end
+
+## Returns lifetime hit-rate percentage string.
+pub function Cache.hit_rate(self: Cache) -> string
+    return format_hit_rate_internal(self.hits, self.hits + self.misses)
+end
+
+## Returns one-line summary of size, counters, and hit rate.
+pub function Cache.summary(self: Cache) -> string
+    return "[Cache] size={len(self.store)}, capacity={self.capacity}, hits={self.hits}, misses={self.misses}, evictions={self.evictions}, hit_rate={self.hit_rate()}"
 end

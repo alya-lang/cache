@@ -8,144 +8,79 @@ function main()
     say ""
 
     # ───────────────────────────────────────────────────────────
-    # 1. Basic Facade Greeting
+    # 1. Basic Set / Get
     # ───────────────────────────────────────────────────────────
-    say "--- 1. Facade Greeting ---"
-    let greeting_default = pkg::hello()
-    say "Default: " + greeting_default
-
-    let greeting_custom = pkg::hello("Alya Developer")
-    say "Custom:  " + greeting_custom
+    say "--- 1. Basic Set / Get ---"
+    let c = pkg::new_cache(128, 0)
+    c.set("user:1", "Ada")
+    c.set("user:2", "Grace")
+    say "user:1 => " + c.get_or("user:1", "missing")
+    say "user:9 => " + c.get_or("user:9", "missing")
+    say "size   => " + str(c.size())
     say ""
 
     # ───────────────────────────────────────────────────────────
-    # 2. Enumeration Values
+    # 2. TTL Expiry
     # ───────────────────────────────────────────────────────────
-    say "--- 2. Enumeration Values ---"
-    say "CacheStatus.Pending  = " + str(pkg::CacheStatus.Pending)
-    say "CacheStatus.Active   = " + str(pkg::CacheStatus.Active)
-    say "CacheStatus.Archived = " + str(pkg::CacheStatus.Archived)
-    say "CacheStatus.Error    = " + str(pkg::CacheStatus.Error)
-
-    say "CachePriority.Low      = " + str(pkg::CachePriority.Low)
-    say "CachePriority.Normal   = " + str(pkg::CachePriority.Normal)
-    say "CachePriority.High     = " + str(pkg::CachePriority.High)
-    say "CachePriority.Critical = " + str(pkg::CachePriority.Critical)
-
-    say "CacheStyle.Standard = " + str(pkg::CacheStyle.Standard)
-    say "CacheStyle.Formal   = " + str(pkg::CacheStyle.Formal)
-    say "CacheStyle.Casual   = " + str(pkg::CacheStyle.Casual)
+    say "--- 2. TTL Expiry ---"
+    c.set("session:token", "abc123", 3600)
+    say "session ttl (s) => " + str(c.ttl("session:token"))
+    say "persist ttl     => " + str(c.ttl("user:1"))
     say ""
 
     # ───────────────────────────────────────────────────────────
-    # 3. Struct Models & Constructors
+    # 3. LRU Eviction
     # ───────────────────────────────────────────────────────────
-    say "--- 3. Struct Models & Constructors ---"
-    let cfg = pkg::new_config("Community", 5, pkg::CachePriority.High, pkg::CacheStyle.Formal)
-    say "Config Name:     " + cfg.name
-    say "Config Count:    " + str(cfg.count)
-    say "Config Priority: " + str(cfg.priority)
-    say "Config Style:    " + str(cfg.style)
-    say "Config Enabled:  " + str(cfg.enabled)
-
-    let stats = pkg::make_stats(100, 92, 6, 2)
-    say "Stats Total:     " + str(stats.total)
-    say "Stats Passed:    " + str(stats.passed)
-    say "Stats Failed:    " + str(stats.failed)
-    say "Stats Skipped:   " + str(stats.skipped)
-    say "Stats Checked:   " + str(stats.total_checked())
-    say "Stats Rate:      " + stats.success_rate()
+    say "--- 3. LRU Eviction ---"
+    let small = pkg::lru_cache(2, 0)
+    small.set("a", 1)
+    small.set("b", 2)
+    small.get("a")
+    small.set("c", 3)
+    say "has a => " + str(small.has("a"))
+    say "has b => " + str(small.has("b"))
+    say "has c => " + str(small.has("c"))
+    say "evictions => " + str(small.evictions)
     say ""
 
     # ───────────────────────────────────────────────────────────
-    # 4. Struct Methods & Immutability
+    # 4. Batch Helpers & Memoize
     # ───────────────────────────────────────────────────────────
-    say "--- 4. Struct Methods & Immutability ---"
-    say "Summary:         " + cfg.summary()
-    say "Description:     " + cfg.describe()
-    say "Is Valid:        " + str(cfg.is_valid())
-    say "Is Enabled:      " + str(cfg.is_enabled())
-
-    let updated_cfg = cfg.with_name("Core Contributors")
-    say "Updated Name:    " + updated_cfg.name
-    say "Original Name:   " + cfg.name
-
-    let critical_cfg = cfg.with_priority(pkg::CachePriority.Critical)
-    say "Updated Prio:    " + str(critical_cfg.priority)
+    say "--- 4. Batch & Memoize ---"
+    let batch = pkg::new_cache(16, 0)
+    batch.set_many({ "x": 1, "y": 2, "z": 3 })
+    let many = batch.get_many(["x", "z", "nope"])
+    say "get_many live keys => " + str(len(many))
+    say "memo first  => " + str(batch.get_or_insert("memo", 99))
+    say "memo second => " + str(batch.get_or_insert("memo", 100))
     say ""
 
     # ───────────────────────────────────────────────────────────
-    # 5. Result Container Pattern
+    # 5. FIFO + Unbounded Flavors
     # ───────────────────────────────────────────────────────────
-    say "--- 5. Result Container Pattern ---"
-    let ok_res = pkg::ok_result(42, "Processed payload successfully")
-    say "Ok Result is_ok:    " + str(ok_res.is_ok())
-    say "Ok Result message:  " + ok_res.message
-    say "Ok Result unwrap:   " + ok_res.unwrap_or("fallback")
-
-    let err_res = pkg::error_result("Processing failed", ["Disk full", "Permission denied"])
-    say "Err Result is_err:  " + str(err_res.is_error())
-    say "Err Result message: " + err_res.message
-    say "Err Result unwrap:  " + err_res.unwrap_or("safe default")
-    say "Err Count:          " + str(len(err_res.errors))
+    say "--- 5. FIFO & Unbounded ---"
+    let fifo = pkg::fifo_cache(2, 0)
+    fifo.set("a", 1)
+    fifo.set("b", 2)
+    fifo.get("a")
+    fifo.set("c", 3)
+    say "fifo keeps b => " + str(fifo.has("b"))
+    let big = pkg::unbounded_cache()
+    big.set("anything", 1)
+    say "unbounded size => " + str(big.size())
     say ""
 
     # ───────────────────────────────────────────────────────────
-    # 6. Structural Duck Typing (Interfaces)
+    # 6. Stats & Maintenance
     # ───────────────────────────────────────────────────────────
-    say "--- 6. Duck Typing (Interfaces) ---"
-    if cfg is pkg::Summarizable
-        say "Summarizable dispatch: " + pkg::format_summary(cfg)
-    end
-    if cfg is pkg::Describable
-        say "Describable dispatch:  " + pkg::format_description(cfg)
-    end
+    say "--- 6. Stats & Maintenance ---"
+    say c.summary()
+    say "pruned => " + str(c.prune())
+    say "keys   => " + str(len(c.keys()))
+    c.clear()
+    say "after clear size => " + str(c.size())
     say ""
 
-    # ───────────────────────────────────────────────────────────
-    # 7. Workflow Processing & Batching
-    # ───────────────────────────────────────────────────────────
-    say "--- 7. Workflow Processing & Batching ---"
-    let single_res = pkg::process("Analytics", 3, pkg::CachePriority.High)
-    say "Single Process Result: " + pkg::format_result(single_res)
-
-    let items = ["Alpha", "Beta", "Gamma"]
-    let batch_res = pkg::process_batch(items)
-    say "Batch count: " + str(len(batch_res))
-    for b in batch_res
-        say "  - " + b
-    end
-    say ""
-
-    # ───────────────────────────────────────────────────────────
-    # 8. Control Flow & Pattern Matching Utilities
-    # ───────────────────────────────────────────────────────────
-    say "--- 8. Utility Functions ---"
-    say "Clamp (-5 in [0, 100]):  " + str(pkg::clamp(-5, 0, 100))
-    say "Clamp (50 in [0, 100]):  " + str(pkg::clamp(50, 0, 100))
-    say "Clamp (150 in [0, 100]): " + str(pkg::clamp(150, 0, 100))
-
-    say "Pluralize (1):           " + pkg::pluralize(1, "item", "items")
-    say "Pluralize (5):           " + pkg::pluralize(5, "item", "items")
-
-    let repeated = pkg::repeat_string("echo", 3)
-    say "Repeat string count:     " + str(len(repeated))
-    say ""
-
-    # ───────────────────────────────────────────────────────────
-    # 9. Destructuring: Tuples & Maps
-    # ───────────────────────────────────────────────────────────
-    say "--- 9. Destructuring ---"
-    let (label, count) = ("example", 42)
-    say "Tuple label: " + label
-    say "Tuple count: " + str(count)
-
-    let info = { "package": "cache", "version": "0.1.0" }
-    let { package: pkg_name, version: pkg_ver } = info
-    say "Map package: " + pkg_name
-    say "Map version: " + pkg_ver
-
-    say ""
     say "Done!"
 end
 

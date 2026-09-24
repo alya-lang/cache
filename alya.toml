@@ -8,7 +8,7 @@ authors = ["Alya Language Contributors <https://github.com/alya-lang>"]
 license = "MIT"
 homepage = "https://github.com/alya-lang/alya"
 repository = "https://github.com/alya-lang/cache"
-keywords = ["alya", "alya-lang", "package", "cache"]
+keywords = ["alya", "alya-lang", "package", "cache", "lru", "fifo", "ttl", "memoize", "in-memory"]
 
 [dependencies]
 

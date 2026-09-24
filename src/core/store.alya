@@ -1,0 +1,296 @@
+## cache Core Storage Engine
+##
+## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
+## Implements set/get/delete with TTL expiry plus LRU/FIFO capacity eviction.
+##
+## Storage layout: user values live directly in the `store` map (maps
+## handle mixed `any` values correctly), while expiry and hit counters
+## live as typed `CacheMeta` structs in the parallel `meta` map.
+
+import "../types.alya"
+
+# ───────────────────────────────────────────────────────────────
+# Private Helpers
+# ───────────────────────────────────────────────────────────────
+
+# Resolves effective TTL: negative `ttl` falls back to cache default.
+function resolve_ttl(ttl: int, default_ttl: int) -> int
+    if ttl < 0
+        return default_ttl
+    end
+    return ttl
+end
+
+# Converts a TTL into an absolute expiry epoch (`0` = never expires).
+function expiry_for(ttl: int) -> int
+    if ttl <= 0
+        return 0
+    end
+    return time() + ttl
+end
+
+# Returns 1 when `meta` is expired right now, 0 otherwise.
+function meta_expired(meta: CacheMeta) -> int
+    if meta.expires_at == 0
+        return 0
+    end
+    if time() >= meta.expires_at
+        return 1
+    end
+    return 0
+end
+
+# Removes all occurrences of `key` from the order array (in place).
+function detach_key(c: Cache, key)
+    let kept = []
+    for k in c.order
+        if k != key
+            kept.push(k)
+        end
+    end
+    c.order = kept
+end
+
+# Moves `key` to the back of the order array (most-recently-used).
+function touch_key(c: Cache, key)
+    detach_key(c, key)
+    c.order.push(key)
+end
+
+# Evicts a single entry when capacity is reached. Returns 1 if evicted.
+function evict_one(c: Cache) -> int
+    if c.capacity <= 0
+        return 0
+    end
+    if c.policy == EvictionPolicy.None
+        return 0
+    end
+    if len(c.store) < c.capacity
+        return 0
+    end
+    if len(c.order) == 0
+        return 0
+    end
+    let victim = c.order[0]
+    if victim in c.store
+        c.store.remove(victim)
+    end
+    if victim in c.meta
+        c.meta.remove(victim)
+    end
+    let rest = []
+    let i = 1
+    while i < len(c.order)
+        rest.push(c.order[i])
+        i += 1
+    end
+    c.order = rest
+    c.evictions += 1
+    return 1
+end
+
+# Removes the entry for `key` from both maps and order. Returns 1 if removed.
+function drop_key(c: Cache, key) -> int
+    let existed = 0
+    if key in c.store
+        existed = 1
+        c.store.remove(key)
+    end
+    if key in c.meta
+        c.meta.remove(key)
+    end
+    detach_key(c, key)
+    return existed
+end
+
+# ───────────────────────────────────────────────────────────────
+# Public Core Functions
+# ───────────────────────────────────────────────────────────────
+
+## Inserts or overwrites `key` with `value` and an optional TTL.
+##
+## ### Parameters
+## - `c`: Target `Cache` instance (mutated in place).
+## - `key`: Entry key string.
+## - `value`: Payload to store (any type, stored directly in the map).
+## - `ttl`: TTL seconds (`< 0` uses cache default, `0` = never expires).
+##
+## ### Returns
+## `1` on success.
+pub function store_set(c: Cache, key, value, ttl: int = -1) -> int
+    let effective = resolve_ttl(ttl, c.default_ttl)
+    let now = time()
+    let expires = expiry_for(effective)
+    let exists = key in c.store ? 1 : 0
+
+    if exists == 0
+        evict_one(c)
+    else
+        detach_key(c, key)
+    end
+
+    c.store[key] = value
+    c.meta[key] = CacheMeta {
+        expires_at: expires,
+        inserted_at: now,
+        entry_hits: 0
+    }
+    c.order.push(key)
+    return 1
+end
+
+## Reads `key`, returning the stored value or null on miss/expiry.
+##
+## Live reads increment hit counters (and refresh LRU recency).
+## Expired entries are removed eagerly and count as misses.
+pub function store_get(c: Cache, key)
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                drop_key(c, key)
+                c.misses += 1
+                return null
+            end
+            meta.entry_hits += 1
+            c.meta[key] = meta
+        end
+        c.hits += 1
+        if c.policy == EvictionPolicy.LRU
+            touch_key(c, key)
+        end
+        return c.store[key]
+    end
+    c.misses += 1
+    return null
+end
+
+## Reads `key`, returning `fallback` instead of null on miss/expiry.
+pub function store_get_or(c: Cache, key, fallback)
+    let val = store_get(c, key)
+    if val is null
+        return fallback
+    end
+    return val
+end
+
+## Returns 1 when `key` exists and is live, 0 otherwise.
+##
+## Expired entries are removed eagerly and reported as absent.
+pub function store_has(c: Cache, key) -> int
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                drop_key(c, key)
+                c.misses += 1
+                return 0
+            end
+        end
+        return 1
+    end
+    return 0
+end
+
+## Deletes `key` from the cache. Returns 1 if an entry was removed.
+pub function store_delete(c: Cache, key) -> int
+    return drop_key(c, key)
+end
+
+## Removes all entries and resets hit/miss/eviction counters.
+pub function store_clear(c: Cache)
+    c.store = map()
+    c.meta = map()
+    c.order = []
+    c.hits = 0
+    c.misses = 0
+    c.evictions = 0
+end
+
+## Returns the number of entries currently held (including unpruned expired).
+pub function store_size(c: Cache) -> int
+    return len(c.store)
+end
+
+# Checks one key for expiry and drops it when expired.
+#
+# NOTE: Loop-free leaf on purpose. It is called once per key from the
+# iteration loop in `Cache.prune` (lib facade), keeping struct-map reads
+# out of any loop body inside this module.
+pub function prune_key(c: Cache, key) -> int
+    if key in c.meta
+        let meta = c.meta[key]
+        if meta.expires_at != 0 and time() >= meta.expires_at
+            if key in c.store
+                c.store.remove(key)
+            end
+            c.meta.remove(key)
+            return 1
+        end
+    end
+    return 0
+end
+
+## Returns an independent snapshot copy of the recency/insertion order.
+##
+## NOTE: Single slice operation, no loop. Lets callers iterate a local
+## array instead of struct fields.
+pub function store_order_snapshot(c: Cache) -> array
+    return c.order[..]
+end
+
+## Replaces the recency/insertion order array.
+pub function store_set_order(c: Cache, order: array)
+    c.order = order
+end
+
+## Returns remaining TTL seconds for `key` (`-1` when missing/expired).
+##
+## A live entry with no expiry reports `0` (never expires).
+pub function store_ttl(c: Cache, key) -> int
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                drop_key(c, key)
+                c.misses += 1
+                return -1
+            end
+            if meta.expires_at == 0
+                return 0
+            end
+            let left = meta.expires_at - time()
+            if left < 0
+                return 0
+            end
+            return left
+        end
+        return 0
+    end
+    return -1
+end
+
+## Refreshes the TTL of a live entry. Returns 1 on success, 0 if missing.
+##
+## ### Parameters
+## - `c`: Target `Cache` instance.
+## - `key`: Entry key string.
+## - `ttl`: New TTL seconds (`0` = persist, `< 0` uses cache default).
+pub function store_expire(c: Cache, key, ttl: int) -> int
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                drop_key(c, key)
+                c.misses += 1
+                return 0
+            end
+            let effective = resolve_ttl(ttl, c.default_ttl)
+            meta.expires_at = expiry_for(effective)
+            c.meta[key] = meta
+            return 1
+        end
+        return 1
+    end
+    return 0
+end

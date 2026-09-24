@@ -7,71 +7,63 @@ import "../src/lib.alya" as pkg
 function main()
     let runner = bench_runner("cache Micro-Benchmarks")
 
-    # Bench 1: hello() facade function — 100k iterations
-    bench_start(runner, 100000)
+    # Bench 1: set() throughput — 20k inserts
+    let c1 = pkg::unbounded_cache()
+    bench_start(runner, 20000)
     let i = 0
-    while i < 100000
-        pkg::hello("Alya")
+    while i < 20000
+        c1.set("k{i}", i)
         i += 1
     end
-    bench_stop(runner, "hello() 100k calls")
+    bench_stop(runner, "set() 20k inserts")
 
-    # Bench 2: process() default call — 100k iterations
-    bench_start(runner, 100000)
+    # Bench 2: get() hit throughput — 50k reads
+    bench_start(runner, 50000)
     let j = 0
-    while j < 100000
-        pkg::process()
+    while j < 50000
+        c1.get("k1")
         j += 1
     end
-    bench_stop(runner, "process() default 100k calls")
+    bench_stop(runner, "get() hit 50k reads")
 
-    # Bench 3: make_config + format_config — 50k iterations
-    bench_start(runner, 50000)
+    # Bench 3: get() miss throughput — 20k reads
+    bench_start(runner, 20000)
     let k = 0
-    while k < 50000
-        let cfg = pkg::new_config("bench", 1, pkg::CachePriority.High, pkg::CacheStyle.Formal)
-        pkg::core_format_custom(cfg)
+    while k < 20000
+        c1.get("absent-{k}")
         k += 1
     end
-    bench_stop(runner, "new_config + format_custom 50k calls")
+    bench_stop(runner, "get() miss 20k reads")
 
-    # Bench 4: process_batch with 10-element array — 10k iterations
-    let labels = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+    # Bench 4: LRU set with eviction — 10k inserts at capacity 128
+    let c4 = pkg::lru_cache(128, 0)
     bench_start(runner, 10000)
     let m = 0
     while m < 10000
-        pkg::process_batch(labels)
+        c4.set("key-{m}", m)
         m += 1
     end
-    bench_stop(runner, "process_batch 10-item list 10k calls")
+    bench_stop(runner, "lru set() with eviction 10k inserts")
 
-    # Bench 5: struct method cfg.summary() — 200k iterations
-    let summ_cfg = pkg::new_config("summary-bench", 5)
-    bench_start(runner, 200000)
+    # Bench 5: set_many batch — 2k batches of 10 entries
+    let c5 = pkg::unbounded_cache()
+    let bulk = { "a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, "g": 7, "h": 8, "i": 9, "j": 10 }
+    bench_start(runner, 2000)
+    let n = 0
+    while n < 2000
+        c5.set_many(bulk)
+        n += 1
+    end
+    bench_stop(runner, "set_many() 10-item batch 2k calls")
+
+    # Bench 6: stats snapshot — 20k snapshots
+    bench_start(runner, 20000)
     let s = 0
-    while s < 200000
-        summ_cfg.summary()
+    while s < 20000
+        c1.stats()
         s += 1
     end
-    bench_stop(runner, "cfg.summary() 200k calls")
-
-    # Bench 6: clamp() utility — 500k iterations
-    bench_start(runner, 500000)
-    let c = 0
-    while c < 500000
-        pkg::clamp(c, 0, 100)
-        c += 1
-    end
-    bench_stop(runner, "clamp() utility 500k calls")
-
-    # Bench 7: repeat_string() utility — 10k iterations
-    bench_start(runner, 10000)
-    let r = 0
-    while r < 10000
-        pkg::repeat_string("bench", 10)
-        r += 1
-    end
-    bench_stop(runner, "repeat_string() 10k calls")
+    bench_stop(runner, "stats() 20k snapshots")
 
     bench_summary(runner)
 end

@@ -11,14 +11,14 @@ High-performance in-memory cache with LRU eviction, TTL expiry, and statistics f
 
 ## 🌟 Features
 
-- ⚡ **Lightweight & High Performance**: Minimal memory overhead, zero runtime bloat, and fast native execution
-- 🧩 **Modular Architecture**: Layered multi-module design featuring a clean public facade (`src/lib.alya`), rich data models (`src/types.alya`), and encapsulated core formatters (`src/core/formatter.alya`)
-- 🔒 **Public/Private Visibility (`pub`)**: Fine-grained export control with `pub` for public functions, structs, and enums, keeping internal helper functions private and encapsulated
-- 🎭 **Structural Duck Typing & Interfaces**: Dynamic interface dispatch (`Summarizable`, `Describable`) without brittle inheritance hierarchies
-- 📦 **Rich Domain Models & Enums**: Idiomatic `enum` types (`CacheStatus`, `CachePriority`, `CacheStyle`) and typed data containers (`CacheConfig`, `CacheResult`, `CacheStats`)
-- 🎯 **Advanced Pattern Matching**: Clean branching with `when` expressions, range matching, and condition guards
-- 🛡️ **Defensive Result Pattern**: Structured error handling and outcome encapsulation with `ok_result` and `error_result`
-- 🧪 **Enterprise Test & Benchmark Suite**: 100% test coverage with standard assertions (`std/test`) and micro-benchmarking (`std/test` bench runner)
+- ⚡ **Zero-Dependency & Pure Alya**: No C code, no FFI, no external services. Values of any type (string, int, array, map) side by side.
+- 🧩 **LRU / FIFO / Unbounded Flavors**: Least-recently-used, first-in-first-out, or no-eviction caches from one API.
+- ⏱️ **Per-Entry TTL**: Default TTL per cache plus per-write override, remaining-time queries, refresh, and eager expiry on read.
+- 📦 **Batch Helpers**: `set_many` / `get_many` bulk operations and `get_or_insert` memoize helper.
+- 📊 **Built-In Statistics**: Hits, misses, evictions, hit-rate, and one-line summaries via `CacheStats`.
+- 🧹 **Maintenance APIs**: `prune` expired entries, snapshot `keys`, `clear` with counter reset.
+- 🔒 **Public/Private Visibility (`pub`)**: Clean facade in `src/lib.alya`; storage engine isolated in `src/core/store.alya`.
+- 🧪 **Enterprise Test & Benchmark Suite**: 90+ assertions (`std/test`) and micro-benchmarks for set/get/evict paths.
 
 ---
 
@@ -31,23 +31,23 @@ cache/
 ├── .gitignore              # Ecosystem standard ignore filters
 ├── .vscode/                # VS Code workspace settings, DAP launch configurations & tasks
 ├── alya.toml               # Package manifest with dependencies and optional [build]
-├── c/                      # (Optional) Native C sources for zero-dependency FFI packages
 ├── src/
-│   ├── lib.alya            # Public API facade (pub exports, re-exports & pipeline runners)
-│   ├── types.alya          # Data models, pub enums, pub structs, and struct methods
-│   ├── ffi.alya            # (Optional) Native extern "C" declarations
-│   └── core/               # Subdirectory module hierarchy
-│       └── formatter.alya  # Domain formatting routines, salutation builders & pattern matchers
+│   ├── lib.alya            # Public API facade (constructors, Cache methods, functional facades)
+│   ├── types.alya          # EvictionPolicy, CacheOptions, CacheMeta, Cache, CacheStats + factories
+│   └── core/
+│       └── store.alya      # Storage engine: set/get/has/delete/TTL/eviction/prune leaves
 ├── examples/
 │   └── demo.alya           # Comprehensive runnable walkthrough of all package capabilities
 ├── tests/
-│   └── test_basic.alya     # Automated test suite with 100% feature coverage
+│   └── test_basic.alya     # Automated test suite with full feature coverage
 └── benches/
-    └── bench_basic.alya    # Micro-benchmarks measuring performance and throughput
+    └── bench_basic.alya    # Micro-benchmarks measuring set/get/evict throughput
 ```
 
 > [!NOTE]
-> **Visibility & Modularity:** Symbols annotated with `pub` (`pub function`, `pub struct`, `pub enum`, `pub interface`) are exported to external consumers and re-exporting modules. Symbols without `pub` remain strictly internal to their declaring module, preventing symbol collisions and implementation leakage.
+> **Storage Layout:** User values live directly in the `store` map (maps handle mixed `any` values correctly). Expiry and hit counters live as statically-typed `CacheMeta` structs in the parallel `meta` map. Recency order is tracked in the `order` array (front = eviction candidate).
+>
+> **Iteration Discipline:** Loops that iterate order snapshots live in the `src/lib.alya` facade and call loop-free `store` leaves once per key; iterated keys are copied (`"" + k`) before struct calls. This layout works around runtime crashes observed with deeper struct-threading chains.
 
 ---
 
@@ -72,70 +72,97 @@ alya install
 ## 🚀 Quick Start
 
 ```alya
-import "cache" as pkg
+import "cache" as cache
 
 function main()
-    # 1. Basic facade call with default parameter
-    let greeting = pkg::hello()
-    say f"Greeting:  {greeting}"
+    # 1. LRU cache with 128 slots and 60s default TTL
+    let c = cache::new_cache(128, 60)
+    c.set("user:1", "Ada")
+    c.set("session:token", "abc123", 3600)
 
-    # 2. Struct configuration with priority, style, and methods
-    let cfg = pkg::new_config("Community", 5, pkg::CachePriority.High, pkg::CacheStyle.Formal)
-    say f"Summary:   {cfg.summary()}"
-    say f"Formatted: {pkg::core_format_custom(cfg)}"
+    say c.get_or("user:1", "missing") # "Ada"
+    say c.ttl("session:token")        # ~3600
 
-    # 3. Processing pipeline returning Result model
-    let res = pkg::process("Analytics", 3, pkg::CachePriority.Critical)
-    say f"Outcome:   {res.message}"
+    # 2. Eviction flavors
+    let fifo = cache::fifo_cache(2, 0)
+    let big = cache::unbounded_cache()
+
+    # 3. Batch + memoize
+    c.set_many({ "a": 1, "b": 2 })
+    let many = c.get_many(["a", "b", "nope"]) # {"a": 1, "b": 2}
+    let v = c.get_or_insert("memo", 99)
+
+    # 4. Stats & maintenance
+    say c.summary()
+    say c.prune() # expired entries removed
 end
 
 main()
 ```
 
+TTL semantics: `ttl < 0` uses the cache default, `ttl == 0` never expires, `ttl > 0` expires that many seconds from now. `capacity <= 0` means unbounded.
+
 ---
 
 ## 📖 API Reference
 
+### Constructors
+
 | Symbol | Visibility | Description |
 |---|---|---|
-| `hello(name = "World")` | `pub function` | Returns a formatted greeting string. Defaults to `"World"` if null or empty. |
-| `new_config(name, count, priority, style)` | `pub function` | Factory constructing a `CacheConfig` with sensible defaults. |
-| `make_config(name, count, priority, style, enabled, tags)` | `pub function` | Full constructor for `CacheConfig`. |
-| `process(label, count, priority)` | `pub function` | Runs processing pipeline, returning an `ok_result` `CacheResult`. |
-| `process_batch(labels)` | `pub function` | Formats an array of labels in batch, returning an array of strings. |
-| `ok_result(value, message)` | `pub function` | Constructs a successful `CacheResult` container (`status = 0`). |
-| `error_result(message, errors)` | `pub function` | Constructs a failed `CacheResult` container (`status = 1`). |
-| `make_stats(total, passed, failed, skipped)` | `pub function` | Constructs a `CacheStats` metrics record. |
-| `format_summary(cfg)` | `pub function` | Formats summary of a config instance (satisfies `Summarizable`). |
-| `format_description(cfg)` | `pub function` | Formats description of a config instance (satisfies `Describable`). |
-| `format_config(config)` | `pub function` | Multi-field formatter producing descriptive overview of a `CacheConfig`. |
-| `format_result(result)` | `pub function` | Formats a `CacheResult` into `[OK]` or `[ERROR]` status line. |
-| `format_stats(stats)` | `pub function` | Formats total checked items and success rate percentage. |
-| `clamp(n, min_val, max_val)` | `pub function` | Clamps an integer value to the closed range `[min_val, max_val]`. |
-| `pluralize(n, singular, plural)` | `pub function` | Pattern-matches count to return singular or plural noun form. |
-| `repeat_string(label, count)` | `pub function` | Repeats a string into an array of `count` items. |
-| `Summarizable` | `pub interface` | Structural contract requiring `summary(self) -> string`. |
-| `Describable` | `pub interface` | Structural contract requiring `describe(self) -> string` and `is_valid(self) -> int`. |
-| `CacheStatus` | `pub enum` | Lifecycle status codes (`Pending = 0`, `Active = 1`, `Archived = 2`, `Error = 3`). |
-| `CachePriority` | `pub enum` | Priority tiers (`Low = 0`, `Normal = 1`, `High = 2`, `Critical = 3`). |
-| `CacheStyle` | `pub enum` | Presentation styles (`Standard = 0`, `Formal = 1`, `Casual = 2`). |
-| `CacheConfig` | `pub struct` | Primary configuration model (`name`, `count`, `priority`, `style`, `enabled`, `tags`). |
-| `CacheConfig.summary()` | `pub method` | Single-line formatted summary (satisfies `Summarizable`). |
-| `CacheConfig.describe()` | `pub method` | Detailed multi-field description (satisfies `Describable`). |
-| `CacheConfig.is_valid()` | `pub method` | Validation guard returning 1 if valid, 0 otherwise. |
-| `CacheConfig.is_enabled()` | `pub method` | Returns 1 if active, 0 if disabled. |
-| `CacheConfig.with_name(new_name)` | `pub method` | Immutable copy with updated name. |
-| `CacheConfig.with_priority(new_prio)` | `pub method` | Immutable copy with updated priority tier. |
-| `CacheResult` | `pub struct` | Operation outcome model (`value`, `status`, `message`, `errors`). |
-| `CacheResult.is_ok()` | `pub method` | Returns 1 if successful (`status == 0`), 0 otherwise. |
-| `CacheResult.is_error()` | `pub method` | Returns 1 if error (`status != 0`), 0 otherwise. |
-| `CacheResult.unwrap_or(fallback)` | `pub method` | Returns message on success, or fallback on error. |
-| `CacheStats` | `pub struct` | Run statistics model (`total`, `passed`, `failed`, `skipped`). |
-| `CacheStats.total_checked()` | `pub method` | Sum of passed and failed items count. |
-| `CacheStats.success_rate()` | `pub method` | Computed percentage string (e.g. `"95%"`). |
+| `new_cache(capacity = 128, default_ttl = 0, policy = EvictionPolicy.LRU)` | `pub function` | Creates a cache with explicit settings. |
+| `lru_cache(capacity = 128, default_ttl = 0)` | `pub function` | Creates an LRU cache. |
+| `fifo_cache(capacity = 128, default_ttl = 0)` | `pub function` | Creates a FIFO cache. |
+| `unbounded_cache(default_ttl = 0)` | `pub function` | Creates a cache with no eviction. |
+| `cache_from_options(opts)` | `pub function` | Creates a cache from a `CacheOptions` instance. |
+| `options_new(capacity, default_ttl, policy)` | `pub function` | Builds a `CacheOptions` record. |
+| `options_lru(capacity, default_ttl)` | `pub function` | Builds LRU options. |
+| `options_fifo(capacity, default_ttl)` | `pub function` | Builds FIFO options. |
+| `options_unbounded(default_ttl)` | `pub function` | Builds unbounded options. |
+| `meta_new(ttl = 0)` | `pub function` | Builds a `CacheMeta` record stamped with the current time. |
+| `make_stats(size, capacity, hits, misses, evictions, policy)` | `pub function` | Builds a `CacheStats` snapshot record. |
+
+### Cache Methods
+
+| Symbol | Visibility | Description |
+|---|---|---|
+| `Cache.set(self, key, value, ttl = -1)` | `pub method` | Inserts or overwrites `key`. Returns `1`. |
+| `Cache.get(self, key)` | `pub method` | Returns the value, or null on miss/expiry. |
+| `Cache.get_or(self, key, fallback)` | `pub method` | Returns the value, or `fallback` on miss/expiry. |
+| `Cache.get_or_insert(self, key, value, ttl = -1)` | `pub method` | Returns the live value, inserting `value` first on miss. |
+| `Cache.has(self, key)` | `pub method` | Returns `1` when `key` is live, `0` otherwise. |
+| `Cache.delete(self, key)` | `pub method` | Deletes `key`. Returns `1` when removed. |
+| `Cache.remove(self, key)` | `pub method` | Alias for `delete`. |
+| `Cache.clear(self)` | `pub method` | Removes all entries and resets counters. |
+| `Cache.size(self)` | `pub method` | Returns the entry count. |
+| `Cache.len(self)` | `pub method` | Returns the entry count. |
+| `Cache.is_empty(self)` | `pub method` | Returns `1` when empty. |
+| `Cache.keys(self)` | `pub method` | Returns a snapshot array of live keys (prunes first). |
+| `Cache.prune(self)` | `pub method` | Removes expired entries. Returns pruned count. |
+| `Cache.stats(self)` | `pub method` | Returns a `CacheStats` snapshot. |
+| `Cache.ttl(self, key)` | `pub method` | Remaining TTL seconds (`-1` missing/expired, `0` persist). |
+| `Cache.expire(self, key, ttl)` | `pub method` | Refreshes a live entry's TTL. Returns `1` on success. |
+| `Cache.set_many(self, values, ttl = -1)` | `pub method` | Bulk insert from a map. Returns inserted count. |
+| `Cache.get_many(self, key_list)` | `pub method` | Bulk read into a live key -> value map. |
+| `Cache.hit_rate(self)` | `pub method` | Hit-rate percentage string (e.g. `"80%"`). |
+| `Cache.summary(self)` | `pub method` | One-line size/counters/hit-rate summary. |
+
+### Functional Facades
+
+`cache_set`, `cache_get`, `cache_get_or`, `cache_has`, `cache_delete`, `cache_clear`, `cache_size`, `cache_keys`, `cache_prune`, `cache_stats`, `cache_set_many`, `cache_get_many` — same behavior with an explicit `Cache` first argument.
+
+### Types
+
+| Symbol | Visibility | Description |
+|---|---|---|
+| `EvictionPolicy` | `pub enum` | `None = 0`, `LRU = 1`, `FIFO = 2`. |
+| `CacheOptions` | `pub struct` | `capacity`, `default_ttl`, `policy`. |
+| `CacheMeta` | `pub struct` | `expires_at`, `inserted_at`, `entry_hits` (+ `is_expired`, `is_alive`, `ttl_remaining`). |
+| `Cache` | `pub struct` | Container with `store` / `meta` maps, `order`, `capacity`, `default_ttl`, `policy`, `hits`, `misses`, `evictions`. |
+| `CacheStats` | `pub struct` | Snapshot with `total_requests`, `hit_rate`, `summary`. |
 
 > [!TIP]
-> **Internal Helpers & Documentation:** Public symbols are documented with `##` Markdown docstrings, enabling automatic API documentation generation via `alya doc`. Private functions such as `build_salutation` and `build_priority_label` in `src/core/formatter.alya` are not annotated with `pub` and remain encapsulated within their respective modules.
+> **Internal Helpers & Documentation:** Public symbols are documented with `##` Markdown docstrings, enabling automatic API documentation generation via `alya doc`. Private functions such as `resolve_ttl`, `detach_key`, and `prune_key` in `src/core/store.alya` are not annotated with `pub` and remain encapsulated.
 
 ---
 

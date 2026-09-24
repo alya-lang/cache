@@ -9,155 +9,221 @@ function main()
     let r = runner_new()
 
     # ═══════════════════════════════════════════════════════════
-    # 1. Facade Greeting & Sanitization
+    # 1. Constructors & Options
     # ═══════════════════════════════════════════════════════════
-    let res = pkg::hello("Alya")
-    runner_assert_str_eq(r, res, "Hello, Alya!", "pkg::hello returns formatted greeting")
+    let c = pkg::new_cache()
+    runner_assert_eq(r, c.size(), 0, "new_cache starts empty")
+    runner_assert_eq(r, c.capacity, 128, "new_cache default capacity is 128")
+    runner_assert_eq(r, c.policy, pkg::EvictionPolicy.LRU, "new_cache defaults to LRU")
 
-    let default_res = pkg::hello()
-    runner_assert_str_eq(r, default_res, "Hello, World!", "pkg::hello() defaults to World")
+    runner_assert_eq(r, pkg::EvictionPolicy.None, 0, "EvictionPolicy.None == 0")
+    runner_assert_eq(r, pkg::EvictionPolicy.LRU, 1, "EvictionPolicy.LRU == 1")
+    runner_assert_eq(r, pkg::EvictionPolicy.FIFO, 2, "EvictionPolicy.FIFO == 2")
 
-    let null_res = pkg::hello(null)
-    runner_assert_str_eq(r, null_res, "Hello, World!", "pkg::hello(null) sanitizes null to World")
+    let opts = pkg::options_lru(4, 60)
+    runner_assert_eq(r, opts.capacity, 4, "options_lru keeps capacity")
+    runner_assert_eq(r, opts.default_ttl, 60, "options_lru keeps default_ttl")
+    runner_assert_eq(r, opts.policy, 1, "options_lru sets LRU policy")
 
-    let empty_res = pkg::hello("")
-    runner_assert_str_eq(r, empty_res, "Hello, World!", "pkg::hello(\"\") sanitizes empty string to World")
+    let fifo_opts = pkg::options_fifo(2, 0)
+    runner_assert_eq(r, fifo_opts.policy, 2, "options_fifo sets FIFO policy")
 
-    # ═══════════════════════════════════════════════════════════
-    # 2. Enumeration Values
-    # ═══════════════════════════════════════════════════════════
-    runner_assert_eq(r, pkg::CacheStatus.Pending, 0, "CacheStatus.Pending == 0")
-    runner_assert_eq(r, pkg::CacheStatus.Active, 1, "CacheStatus.Active == 1")
-    runner_assert_eq(r, pkg::CacheStatus.Archived, 2, "CacheStatus.Archived == 2")
-    runner_assert_eq(r, pkg::CacheStatus.Error, 3, "CacheStatus.Error == 3")
+    let unb_opts = pkg::options_unbounded()
+    runner_assert_eq(r, unb_opts.capacity, 0, "options_unbounded capacity is 0")
+    runner_assert_eq(r, unb_opts.policy, 0, "options_unbounded policy is None")
 
-    runner_assert_eq(r, pkg::CachePriority.Low, 0, "CachePriority.Low == 0")
-    runner_assert_eq(r, pkg::CachePriority.Normal, 1, "CachePriority.Normal == 1")
-    runner_assert_eq(r, pkg::CachePriority.High, 2, "CachePriority.High == 2")
-    runner_assert_eq(r, pkg::CachePriority.Critical, 3, "CachePriority.Critical == 3")
+    let from_opts = pkg::cache_from_options(opts)
+    runner_assert_eq(r, from_opts.capacity, 4, "cache_from_options keeps capacity")
+    runner_assert_eq(r, from_opts.default_ttl, 60, "cache_from_options keeps ttl")
 
-    runner_assert_eq(r, pkg::CacheStyle.Standard, 0, "CacheStyle.Standard == 0")
-    runner_assert_eq(r, pkg::CacheStyle.Formal, 1, "CacheStyle.Formal == 1")
-    runner_assert_eq(r, pkg::CacheStyle.Casual, 2, "CacheStyle.Casual == 2")
-
-    # ═══════════════════════════════════════════════════════════
-    # 3. Struct Models & Factory Constructors
-    # ═══════════════════════════════════════════════════════════
-    let cfg = pkg::new_config("Community", 5, pkg::CachePriority.High, pkg::CacheStyle.Formal)
-    runner_assert_str_eq(r, cfg.name, "Community", "cfg.name is initialized correctly")
-    runner_assert_eq(r, cfg.count, 5, "cfg.count is initialized correctly")
-    runner_assert_eq(r, cfg.priority, 2, "cfg.priority is initialized to High (2)")
-    runner_assert_eq(r, cfg.style, 1, "cfg.style is initialized to Formal (1)")
-    runner_assert_eq(r, cfg.enabled, 1, "cfg.enabled defaults to 1")
-
-    let full_cfg = pkg::make_config("Full", 10, pkg::CachePriority.Critical, pkg::CacheStyle.Casual, 0, ["tag1", "tag2"])
-    runner_assert_str_eq(r, full_cfg.name, "Full", "full_cfg.name is correct")
-    runner_assert_eq(r, full_cfg.count, 10, "full_cfg.count is correct")
-    runner_assert_eq(r, full_cfg.priority, 3, "full_cfg.priority is Critical (3)")
-    runner_assert_eq(r, full_cfg.enabled, 0, "full_cfg.enabled is 0")
-    runner_assert_eq(r, len(full_cfg.tags), 2, "full_cfg.tags has 2 elements")
+    let lru = pkg::lru_cache(8, 0)
+    runner_assert_eq(r, lru.policy, 1, "lru_cache uses LRU")
+    let fifo = pkg::fifo_cache(8, 0)
+    runner_assert_eq(r, fifo.policy, 2, "fifo_cache uses FIFO")
+    let unb = pkg::unbounded_cache()
+    runner_assert_eq(r, unb.capacity, 0, "unbounded_cache capacity is 0")
+    runner_assert_eq(r, unb.policy, 0, "unbounded_cache policy is None")
 
     # ═══════════════════════════════════════════════════════════
-    # 4. Struct Methods & Immutability
+    # 2. Basic Set / Get / Has / Delete
     # ═══════════════════════════════════════════════════════════
-    let summ = cfg.summary()
-    runner_assert_str_eq(r, summ, "Community (count: 5, active)", "cfg.summary() returns expected formatted summary")
+    let basic = pkg::new_cache(16, 0)
+    basic.set("user:1", "Ada")
+    runner_assert_str_eq(r, basic.get("user:1"), "Ada", "get returns stored value")
+    runner_assert_eq(r, basic.has("user:1"), 1, "has returns 1 for live key")
+    runner_assert_eq(r, basic.has("user:9"), 0, "has returns 0 for missing key")
+    runner_assert_eq(r, basic.size(), 1, "size counts one entry")
 
-    let desc = cfg.describe()
-    runner_assert_true(r, len(desc) > 0, "cfg.describe() returns non-empty description")
+    basic.set("user:1", "Grace")
+    runner_assert_str_eq(r, basic.get("user:1"), "Grace", "set overwrites existing key")
+    runner_assert_eq(r, basic.size(), 1, "overwrite does not grow size")
 
-    runner_assert_eq(r, cfg.is_valid(), 1, "cfg.is_valid() returns 1 for valid configuration")
-    runner_assert_eq(r, cfg.is_enabled(), 1, "cfg.is_enabled() returns 1")
+    runner_assert_eq(r, basic.delete("user:1"), 1, "delete returns 1 when removed")
+    runner_assert_eq(r, basic.has("user:1"), 0, "deleted key is absent")
+    runner_assert_eq(r, basic.delete("user:1"), 0, "delete returns 0 when missing")
+    runner_assert_eq(r, basic.remove("nope"), 0, "remove alias returns 0 when missing")
 
-    let updated_name_cfg = cfg.with_name("Contributors")
-    runner_assert_str_eq(r, updated_name_cfg.name, "Contributors", "with_name updates name")
-    runner_assert_str_eq(r, cfg.name, "Community", "original cfg.name remains immutable")
+    let missed = basic.get("ghost")
+    runner_assert_true(r, missed is null, "get on missing key returns null")
 
-    let updated_prio_cfg = cfg.with_priority(pkg::CachePriority.Critical)
-    runner_assert_eq(r, updated_prio_cfg.priority, 3, "with_priority updates priority")
-    runner_assert_eq(r, cfg.priority, 2, "original cfg.priority remains unchanged")
-
-    # ═══════════════════════════════════════════════════════════
-    # 5. Result Container & Methods
-    # ═══════════════════════════════════════════════════════════
-    let ok_res = pkg::ok_result(42, "Computed successfully")
-    runner_assert_eq(r, ok_res.is_ok(), 1, "ok_res.is_ok() == 1")
-    runner_assert_eq(r, ok_res.is_error(), 0, "ok_res.is_error() == 0")
-    runner_assert_str_eq(r, ok_res.unwrap_or("fallback"), "Computed successfully", "ok_res unwrap_or returns message")
-
-    let err_res = pkg::error_result("Failed operation", ["Invalid input", "Timeout"])
-    runner_assert_eq(r, err_res.is_ok(), 0, "err_res.is_ok() == 0")
-    runner_assert_eq(r, err_res.is_error(), 1, "err_res.is_error() == 1")
-    runner_assert_str_eq(r, err_res.unwrap_or("fallback"), "fallback", "err_res unwrap_or returns fallback")
-    runner_assert_eq(r, len(err_res.errors), 2, "err_res contains 2 error details")
+    # Non-string payloads round-trip untouched
+    basic.set("n", 42)
+    runner_assert_eq(r, basic.get("n"), 42, "integer payload round-trips")
+    basic.set("arr", [1, 2, 3])
+    runner_assert_eq(r, len(basic.get("arr")), 3, "array payload round-trips")
 
     # ═══════════════════════════════════════════════════════════
-    # 6. Statistics Container & Methods
+    # 3. get_or Fallback & get_or_insert
     # ═══════════════════════════════════════════════════════════
-    let stats = pkg::make_stats(20, 18, 2, 0)
-    runner_assert_eq(r, stats.total, 20, "stats.total == 20")
-    runner_assert_eq(r, stats.passed, 18, "stats.passed == 18")
-    runner_assert_eq(r, stats.failed, 2, "stats.failed == 2")
-    runner_assert_eq(r, stats.total_checked(), 20, "stats.total_checked() == 20")
-    runner_assert_str_eq(r, stats.success_rate(), "90%", "stats.success_rate() == 90%")
+    let fb = pkg::new_cache(8, 0)
+    runner_assert_str_eq(r, fb.get_or("missing", "fallback"), "fallback", "get_or returns fallback on miss")
+    fb.set("present", "here")
+    runner_assert_str_eq(r, fb.get_or("present", "fallback"), "here", "get_or returns value on hit")
 
-    # ═══════════════════════════════════════════════════════════
-    # 7. Duck Typing Polymorphism (Interfaces)
-    # ═══════════════════════════════════════════════════════════
-    let is_summ = cfg is pkg::Summarizable
-    runner_assert_true(r, is_summ, "cfg satisfies Summarizable interface implicitly")
-    let iface_summ = pkg::format_summary(cfg)
-    runner_assert_str_eq(r, iface_summ, "Community (count: 5, active)", "format_summary dispatches via Summarizable")
+    runner_assert_str_eq(r, fb.get_or_insert("memo", "computed"), "computed", "get_or_insert stores on miss")
+    runner_assert_str_eq(r, fb.get_or_insert("memo", "other"), "computed", "get_or_insert keeps existing on hit")
 
-    let is_desc = cfg is pkg::Describable
-    runner_assert_true(r, is_desc, "cfg satisfies Describable interface implicitly")
-    let iface_desc = pkg::format_description(cfg)
-    runner_assert_true(r, len(iface_desc) > 0, "format_description dispatches via Describable")
-
-    # Struct that does not implement Summarizable
-    let is_stats_summ = stats is pkg::Summarizable
-    runner_assert_false(r, is_stats_summ, "stats does not satisfy Summarizable interface")
+    # Standalone functional facade mirrors methods
+    let fn_cache = pkg::new_cache(8, 0)
+    pkg::cache_set(fn_cache, "k", "v")
+    runner_assert_str_eq(r, pkg::cache_get(fn_cache, "k"), "v", "cache_set/cache_get facade works")
+    runner_assert_eq(r, pkg::cache_has(fn_cache, "k"), 1, "cache_has facade works")
+    runner_assert_str_eq(r, pkg::cache_get_or(fn_cache, "zz", "dflt"), "dflt", "cache_get_or facade works")
+    runner_assert_eq(r, pkg::cache_size(fn_cache), 1, "cache_size facade works")
+    runner_assert_eq(r, pkg::cache_delete(fn_cache, "k"), 1, "cache_delete facade works")
 
     # ═══════════════════════════════════════════════════════════
-    # 8. Workflow Processing & Batching
+    # 4. TTL Expiry (no-expiry default + short live TTL)
     # ═══════════════════════════════════════════════════════════
-    let proc_res = pkg::process("Alice", 3, pkg::CachePriority.High)
-    runner_assert_eq(r, proc_res.is_ok(), 1, "pkg::process returns successful result")
-    runner_assert_str_eq(r, proc_res.message, "OK", "pkg::process message is OK")
+    let ttlc = pkg::new_cache(8, 0)
+    ttlc.set("persist", "forever")
+    runner_assert_eq(r, ttlc.ttl("persist"), 0, "ttl 0 entry reports 0 (never expires)")
+    runner_assert_eq(r, ttlc.ttl("absent"), -1, "ttl on missing key is -1")
 
-    let batch_in = ["Alpha", "Beta", "Gamma"]
-    let batch_out = pkg::process_batch(batch_in)
-    runner_assert_eq(r, len(batch_out), 3, "process_batch returns 3 formatted records")
+    ttlc.set("session", "abc", 3600)
+    let remaining = ttlc.ttl("session")
+    runner_assert_true(r, remaining > 0 and remaining <= 3600, "ttl reports remaining seconds")
 
-    let null_batch = pkg::process_batch(null)
-    runner_assert_eq(r, len(null_batch), 0, "process_batch(null) returns empty array")
+    # Refresh TTL to persist
+    runner_assert_eq(r, ttlc.expire("session", 0), 1, "expire to 0 persists entry")
+    runner_assert_eq(r, ttlc.ttl("session"), 0, "persisted entry reports ttl 0")
+    runner_assert_eq(r, ttlc.expire("absent", 60), 0, "expire on missing key returns 0")
+
+    # Real expiry with a short TTL
+    ttlc.set("flash", "gone-soon", 1)
+    runner_assert_str_eq(r, ttlc.get("flash"), "gone-soon", "short-ttl entry readable before expiry")
+    sleep(1200)
+    let after = ttlc.get("flash")
+    runner_assert_true(r, after is null, "expired entry reads as null")
+    runner_assert_eq(r, ttlc.has("flash"), 0, "expired entry reported absent")
+
+    # Entry-level expiry helpers (deterministic, no sleep)
+    let meta = pkg::meta_new(0)
+    runner_assert_eq(r, meta.is_expired(), 0, "persist meta never expires")
+    runner_assert_eq(r, meta.is_alive(), 1, "persist meta is alive")
+    runner_assert_eq(r, meta.ttl_remaining(), 0, "persist meta ttl_remaining is 0")
 
     # ═══════════════════════════════════════════════════════════
-    # 9. Control Flow & Pattern Matching Utilities
+    # 5. LRU Eviction
     # ═══════════════════════════════════════════════════════════
-    runner_assert_eq(r, pkg::clamp(50, 0, 100), 50, "clamp within bounds")
-    runner_assert_eq(r, pkg::clamp(-10, 0, 100), 0, "clamp lower bound")
-    runner_assert_eq(r, pkg::clamp(150, 0, 100), 100, "clamp upper bound")
-
-    runner_assert_str_eq(r, pkg::pluralize(1, "record", "records"), "record", "pluralize 1 gives singular")
-    runner_assert_str_eq(r, pkg::pluralize(0, "record", "records"), "records", "pluralize 0 gives plural")
-    runner_assert_str_eq(r, pkg::pluralize(5, "record", "records"), "records", "pluralize 5 gives plural")
-
-    let repeated = pkg::repeat_string("item", 3)
-    runner_assert_eq(r, len(repeated), 3, "repeat_string produces 3 elements")
-    runner_assert_str_eq(r, repeated[0], "item", "repeated element matches input")
+    let lru2 = pkg::lru_cache(2, 0)
+    lru2.set("a", 1)
+    lru2.set("b", 2)
+    # Touch "a" so "b" becomes least-recently-used
+    lru2.get("a")
+    lru2.set("c", 3)
+    runner_assert_eq(r, lru2.has("b"), 0, "LRU evicts least-recently-used key")
+    runner_assert_eq(r, lru2.has("a"), 1, "LRU keeps recently read key")
+    runner_assert_eq(r, lru2.has("c"), 1, "LRU keeps newest key")
+    runner_assert_eq(r, lru2.size(), 2, "LRU keeps size at capacity")
+    runner_assert_eq(r, lru2.evictions, 1, "LRU counts one eviction")
 
     # ═══════════════════════════════════════════════════════════
-    # 10. Destructuring: Tuples & Maps
+    # 6. FIFO Eviction (reads do not refresh)
     # ═══════════════════════════════════════════════════════════
-    let (t_prefix, t_count) = ("Custom", 42)
-    runner_assert_str_eq(r, t_prefix, "Custom", "tuple destructuring binds string")
-    runner_assert_eq(r, t_count, 42, "tuple destructuring binds integer")
+    let fifo2 = pkg::fifo_cache(2, 0)
+    fifo2.set("a", 1)
+    fifo2.set("b", 2)
+    fifo2.get("a")
+    fifo2.get("a")
+    fifo2.set("c", 3)
+    runner_assert_eq(r, fifo2.has("a"), 0, "FIFO evicts oldest-inserted key despite reads")
+    runner_assert_eq(r, fifo2.has("b"), 1, "FIFO keeps newer key")
+    runner_assert_eq(r, fifo2.has("c"), 1, "FIFO keeps newest key")
 
-    let pkg_info = { "name": "cache", "version": "0.1.0" }
-    let { name: info_name, version: info_ver } = pkg_info
-    runner_assert_str_eq(r, info_name, "cache", "map destructuring extracts key name")
-    runner_assert_str_eq(r, info_ver, "0.1.0", "map destructuring extracts key version")
+    # ═══════════════════════════════════════════════════════════
+    # 7. Unbounded Cache Never Evicts
+    # ═══════════════════════════════════════════════════════════
+    let big = pkg::unbounded_cache()
+    let idx = 0
+    while idx < 50
+        big.set("k{idx}", idx)
+        idx += 1
+    end
+    runner_assert_eq(r, big.size(), 50, "unbounded cache grows past default capacity")
+    runner_assert_eq(r, big.evictions, 0, "unbounded cache never evicts")
+
+    # ═══════════════════════════════════════════════════════════
+    # 8. Batch Helpers, Keys, Prune, Clear, Stats
+    # ═══════════════════════════════════════════════════════════
+    let batch = pkg::new_cache(16, 0)
+    let inserted = batch.set_many({ "x": 1, "y": 2, "z": 3 })
+    runner_assert_eq(r, inserted, 3, "set_many inserts 3 entries")
+    runner_assert_eq(r, batch.size(), 3, "size reflects batch insert")
+
+    let many = batch.get_many(["x", "z", "nope"])
+    runner_assert_eq(r, len(many), 2, "get_many returns only live keys")
+    runner_assert_eq(r, many["x"], 1, "get_many maps x correctly")
+
+    let ks = batch.keys()
+    runner_assert_eq(r, len(ks), 3, "keys snapshot has 3 entries")
+
+    # Default TTL from constructor applies when set omits ttl
+    let defttl = pkg::new_cache(8, 3600)
+    defttl.set("auto", "v")
+    runner_assert_true(r, defttl.ttl("auto") > 0, "constructor default_ttl applies to set")
+
+    let pruned = batch.prune()
+    runner_assert_eq(r, pruned, 0, "prune with no expiry removes nothing")
+
+    let st = batch.stats()
+    runner_assert_eq(r, st.size, 3, "stats.size matches cache")
+    runner_assert_eq(r, st.capacity, 16, "stats.capacity matches cache")
+    runner_assert_true(r, st.hits >= 2, "stats tracks hits")
+    runner_assert_true(r, st.misses >= 1, "stats tracks misses")
+    runner_assert_str_eq(r, st.hit_rate(), batch.hit_rate(), "stats hit_rate matches cache hit_rate")
+
+    let summ = batch.summary()
+    runner_assert_true(r, len(summ) > 0, "cache summary is non-empty")
+    let st_summ = st.summary()
+    runner_assert_true(r, len(st_summ) > 0, "stats summary is non-empty")
+    runner_assert_true(r, st.total_requests() == st.hits + st.misses, "total_requests sums hits and misses")
+
+    batch.clear()
+    runner_assert_eq(r, batch.size(), 0, "clear empties the cache")
+    runner_assert_eq(r, batch.is_empty(), 1, "is_empty after clear")
+    runner_assert_eq(r, len(batch.keys()), 0, "keys empty after clear")
+    runner_assert_str_eq(r, batch.hit_rate(), "0%", "hit_rate resets to 0% after clear")
+    runner_assert_eq(r, batch.len(), 0, "len reports 0 after clear")
+
+    # ═══════════════════════════════════════════════════════════
+    # 9. Mixed Value Types (string + int + array side by side)
+    # ═══════════════════════════════════════════════════════════
+    let mixed = pkg::new_cache(16, 0)
+    mixed.set("name", "Ada")
+    mixed.set("age", 36)
+    mixed.set("tags", ["a", "b"])
+    runner_assert_str_eq(r, mixed.get("name"), "Ada", "string value survives beside ints")
+    runner_assert_eq(r, mixed.get("age"), 36, "int value survives beside strings")
+    runner_assert_str_eq(r, str(mixed.get("age")), "36", "str() of cached int works beside strings")
+    runner_assert_str_eq(r, mixed.get_or("name", "?"), "Ada", "get_or returns cached string")
+    runner_assert_eq(r, len(mixed.get("tags")), 2, "array value survives beside strings")
+    runner_assert_eq(r, mixed.size(), 3, "mixed cache holds 3 entries")
+    let mixed_keys = mixed.keys()
+    runner_assert_eq(r, len(mixed_keys), 3, "mixed keys snapshot has 3 entries")
+    for mk in mixed_keys
+        runner_assert_eq(r, mixed.has(mk), 1, "mixed snapshot key is usable")
+    end
 
     let failed = runner_summary(r)
     if failed > 0
