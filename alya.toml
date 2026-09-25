@@ -12,12 +12,6 @@ keywords = ["alya", "alya-lang", "package", "cache", "lru", "fifo", "ttl", "memo
 
 [dependencies]
 
-# [build]
-# c-sources = ["c/source.c"]
-# c-flags = ["-O2"]
-# c-include-dirs = ["c"]
-# links = "cache"
-
 # [lint]
 # disabled_rules = []
 # exclude = []
