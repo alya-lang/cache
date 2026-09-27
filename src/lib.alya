@@ -100,9 +100,31 @@ pub function Cache.set_float(self: Cache, key, value: float, ttl: int = -1) -> i
     return store_set(self, key, snapshot_encode_float(value), ttl, "f")
 end
 
+## Inserts a bool value with an optional TTL, tagged for snapshots.
+##
+## Normalizes to `1`/`0` (`null` and `0` become `0`, everything else `1`)
+## and records the `"b"` kind tag so `save` persists the entry.
+pub function Cache.set_bool(self: Cache, key, value, ttl: int = -1) -> int
+    let flag = 1
+    if value is null
+        flag = 0
+    elif value == 0
+        flag = 0
+    end
+    return store_set(self, key, flag, ttl, "b")
+end
+
 ## Returns the value for `key`, or null on miss/expiry.
 pub function Cache.get(self: Cache, key)
     return store_get(self, key)
+end
+
+## Returns the bool value for a `set_bool` entry (`1`/`0`), or null otherwise.
+##
+## Wrong-kind and missing keys yield null (counted as misses), mirroring
+## `get_float` semantics for `"f"` entries.
+pub function Cache.get_bool(self: Cache, key)
+    return store_get_bool(self, key)
 end
 
 ## Returns the value for `key` without affecting recency or counters.
@@ -142,6 +164,20 @@ pub function Cache.remove(self: Cache, key) -> int
     return store_delete(self, key)
 end
 
+## Returns the value for `key` and removes the entry, or null on miss/expiry.
+##
+## Counts like a `get` (hit on success, miss on expiry) followed by a
+## delete. Note the package-wide null rule: a stored null reads as a miss,
+## so `take` on a null-valued entry returns null without removing it.
+pub function Cache.take(self: Cache, key)
+    let val = store_get(self, key)
+    if val is null
+        return null
+    end
+    store_delete(self, key)
+    return val
+end
+
 ## Removes all entries and resets hit/miss/eviction counters.
 pub function Cache.clear(self: Cache)
     store_clear(self)
@@ -169,6 +205,52 @@ pub function Cache.keys(self: Cache) -> array
     end
     store_set_order(self, live)
     return live
+end
+
+## Returns a snapshot array of live values (expired entries pruned first).
+##
+## Order matches `keys()` (insertion/recency order). Like `peek`, reads
+## record no hits and leave recency untouched; unlike `get_many`, stored
+## nulls are kept so indices stay aligned with `keys()`.
+##
+## NOTE: The loop lives in this facade frame (see `keys()` note).
+pub function Cache.values(self: Cache) -> array
+    let out = []
+    let live = []
+    let snapshot = store_order_snapshot(self)
+    for k in snapshot
+        let key = "" + k
+        if prune_key(self, key) == 1
+            continue
+        end
+        live.push(key)
+        out.push(store_peek(self, key))
+    end
+    store_set_order(self, live)
+    return out
+end
+
+## Returns a map of all live key -> value pairs (expired pruned first).
+##
+## Same traversal as `values()`; stored nulls are skipped for consistency
+## with `get_many`. Reads record no hits and leave recency untouched.
+pub function Cache.entries(self: Cache) -> map
+    let out = map()
+    let live = []
+    let snapshot = store_order_snapshot(self)
+    for k in snapshot
+        let key = "" + k
+        if prune_key(self, key) == 1
+            continue
+        end
+        live.push(key)
+        let val = store_peek(self, key)
+        if val is not null
+            out[key] = val
+        end
+    end
+    store_set_order(self, live)
+    return out
 end
 
 ## Removes expired entries. Returns the number of entries pruned.
@@ -204,6 +286,18 @@ end
 ## Returns remaining TTL seconds for `key` (`-1` missing/expired, `0` persist).
 pub function Cache.ttl(self: Cache, key) -> int
     return store_ttl(self, key)
+end
+
+## Returns remaining TTL milliseconds for `key` (`-1` missing/expired, `0` persist).
+pub function Cache.ttl_ms(self: Cache, key) -> int
+    return store_ttl_ms(self, key)
+end
+
+## Returns the per-entry read count for a live `key` (`-1` missing/expired).
+##
+## Inspects LFU frequency without touching counters or recency.
+pub function Cache.entry_hits(self: Cache, key) -> int
+    return store_entry_hits(self, key)
 end
 
 ## Refreshes the TTL of a live entry. Returns 1 on success, 0 if missing.
@@ -285,6 +379,69 @@ pub function Cache.set_many(self: Cache, values: map, ttl: int = -1) -> int
     return n
 end
 
+## Bulk insert tagging every entry as string (`"s"`, persisted by `save`).
+pub function Cache.set_many_str(self: Cache, values: map, ttl: int = -1) -> int
+    if values is null
+        return 0
+    end
+    let n = 0
+    for k in keys(values)
+        store_set(self, k, values[k], ttl, "s")
+        n += 1
+    end
+    return n
+end
+
+## Bulk insert tagging every entry as int (`"i"`, persisted by `save`).
+pub function Cache.set_many_int(self: Cache, values: map, ttl: int = -1) -> int
+    if values is null
+        return 0
+    end
+    let n = 0
+    for k in keys(values)
+        store_set(self, k, values[k], ttl, "i")
+        n += 1
+    end
+    return n
+end
+
+## Bulk insert encoding every entry as float (`"f"`, persisted by `save`).
+##
+## Values must be floats (same fixed-point codec as `set_float`).
+pub function Cache.set_many_float(self: Cache, values: map, ttl: int = -1) -> int
+    if values is null
+        return 0
+    end
+    let n = 0
+    for k in keys(values)
+        store_set(self, k, snapshot_encode_float(values[k]), ttl, "f")
+        n += 1
+    end
+    return n
+end
+
+## Bulk insert normalizing every entry to bool (`"b"`, persisted by `save`).
+##
+## Same `null`/`0` -> `0`, else `1` rule as `set_bool`.
+pub function Cache.set_many_bool(self: Cache, values: map, ttl: int = -1) -> int
+    if values is null
+        return 0
+    end
+    let n = 0
+    for k in keys(values)
+        let v = values[k]
+        let flag = 1
+        if v is null
+            flag = 0
+        elif v == 0
+            flag = 0
+        end
+        store_set(self, k, flag, ttl, "b")
+        n += 1
+    end
+    return n
+end
+
 ## Reads many keys, returning a map of live key -> value pairs.
 ##
 ## NOTE: Loops in this frame (see `keys()` note).
@@ -336,15 +493,16 @@ end
 pub function Cache.set_jittered(self: Cache, key, value, ttl: int, max_jitter: int = 0) -> int
     let spread = 0
     if max_jitter > 0 and ttl > 0
-        spread = (time() + len(key) * 7919 + len(self.order) * 31) % (max_jitter + 1)
+        spread = (clock_ms() + len(key) * 7919 + len(self.order) * 31) % (max_jitter + 1)
     end
     return store_set(self, key, value, ttl + spread)
 end
 
 ## Persists live entries written via typed setters to `path`.
 ##
-## Only `set_str`/`set_int`/`set_float` entries carry a kind tag and are
-## persisted (string/int/float); generic `set` values, already-expired
+## Only `set_str`/`set_int`/`set_float`/`set_bool` entries (and the
+## `set_many_*` batch variants) carry a kind tag and are persisted
+## (string/int/float/bool); generic `set`/`set_many` values, already-expired
 ## entries, and other types are skipped. Format is line-based
 ## (`alyacache v1` header, tab-separated fields). Returns the number of
 ## entries persisted.
@@ -410,6 +568,17 @@ pub function cache_set_float(c: Cache, key, value: float, ttl: int = -1) -> int
     return store_set(c, key, snapshot_encode_float(value), ttl, "f")
 end
 
+## Functional `set_bool` operating on an explicit cache instance.
+pub function cache_set_bool(c: Cache, key, value, ttl: int = -1) -> int
+    let flag = 1
+    if value is null
+        flag = 0
+    elif value == 0
+        flag = 0
+    end
+    return store_set(c, key, flag, ttl, "b")
+end
+
 ## Functional `get` operating on an explicit cache instance.
 pub function cache_get(c: Cache, key)
     return store_get(c, key)
@@ -428,6 +597,16 @@ end
 ## Functional `delete` operating on an explicit cache instance.
 pub function cache_delete(c: Cache, key) -> int
     return store_delete(c, key)
+end
+
+## Functional `take` operating on an explicit cache instance.
+pub function cache_take(c: Cache, key)
+    let val = store_get(c, key)
+    if val is null
+        return null
+    end
+    store_delete(c, key)
+    return val
 end
 
 ## Functional `clear` operating on an explicit cache instance.
@@ -453,6 +632,43 @@ pub function cache_keys(c: Cache) -> array
     end
     store_set_order(c, live)
     return live
+end
+
+## Functional `values` operating on an explicit cache instance.
+pub function cache_values(c: Cache) -> array
+    let out = []
+    let live = []
+    let snapshot = store_order_snapshot(c)
+    for k in snapshot
+        let key = "" + k
+        if prune_key(c, key) == 1
+            continue
+        end
+        live.push(key)
+        out.push(store_peek(c, key))
+    end
+    store_set_order(c, live)
+    return out
+end
+
+## Functional `entries` operating on an explicit cache instance.
+pub function cache_entries(c: Cache) -> map
+    let out = map()
+    let live = []
+    let snapshot = store_order_snapshot(c)
+    for k in snapshot
+        let key = "" + k
+        if prune_key(c, key) == 1
+            continue
+        end
+        live.push(key)
+        let val = store_peek(c, key)
+        if val is not null
+            out[key] = val
+        end
+    end
+    store_set_order(c, live)
+    return out
 end
 
 ## Functional `prune` operating on an explicit cache instance.
@@ -485,6 +701,21 @@ end
 ## Functional `get_float` operating on an explicit cache instance.
 pub function cache_get_float(c: Cache, key)
     return store_get_float(c, key)
+end
+
+## Functional `get_bool` operating on an explicit cache instance.
+pub function cache_get_bool(c: Cache, key)
+    return store_get_bool(c, key)
+end
+
+## Functional `ttl_ms` operating on an explicit cache instance.
+pub function cache_ttl_ms(c: Cache, key) -> int
+    return store_ttl_ms(c, key)
+end
+
+## Functional `entry_hits` operating on an explicit cache instance.
+pub function cache_entry_hits(c: Cache, key) -> int
+    return store_entry_hits(c, key)
 end
 
 ## Functional `touch` operating on an explicit cache instance.
@@ -543,7 +774,7 @@ end
 pub function cache_set_jittered(c: Cache, key, value, ttl: int, max_jitter: int = 0) -> int
     let spread = 0
     if max_jitter > 0 and ttl > 0
-        spread = (time() + len(key) * 7919 + len(c.order) * 31) % (max_jitter + 1)
+        spread = (clock_ms() + len(key) * 7919 + len(c.order) * 31) % (max_jitter + 1)
     end
     return store_set(c, key, value, ttl + spread)
 end
@@ -601,6 +832,65 @@ pub function cache_set_many(c: Cache, values: map, ttl: int = -1) -> int
     let n = 0
     for k in keys(values)
         store_set(c, k, values[k], ttl)
+        n += 1
+    end
+    return n
+end
+
+## Functional `set_many_str` operating on an explicit cache instance.
+pub function cache_set_many_str(c: Cache, values: map, ttl: int = -1) -> int
+    if values is null
+        return 0
+    end
+    let n = 0
+    for k in keys(values)
+        store_set(c, k, values[k], ttl, "s")
+        n += 1
+    end
+    return n
+end
+
+## Functional `set_many_int` operating on an explicit cache instance.
+pub function cache_set_many_int(c: Cache, values: map, ttl: int = -1) -> int
+    if values is null
+        return 0
+    end
+    let n = 0
+    for k in keys(values)
+        store_set(c, k, values[k], ttl, "i")
+        n += 1
+    end
+    return n
+end
+
+## Functional `set_many_float` operating on an explicit cache instance.
+pub function cache_set_many_float(c: Cache, values: map, ttl: int = -1) -> int
+    if values is null
+        return 0
+    end
+    let n = 0
+    for k in keys(values)
+        store_set(c, k, snapshot_encode_float(values[k]), ttl, "f")
+        n += 1
+    end
+    return n
+end
+
+## Functional `set_many_bool` operating on an explicit cache instance.
+pub function cache_set_many_bool(c: Cache, values: map, ttl: int = -1) -> int
+    if values is null
+        return 0
+    end
+    let n = 0
+    for k in keys(values)
+        let v = values[k]
+        let flag = 1
+        if v is null
+            flag = 0
+        elif v == 0
+            flag = 0
+        end
+        store_set(c, k, flag, ttl, "b")
         n += 1
     end
     return n

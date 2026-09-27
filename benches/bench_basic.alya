@@ -84,6 +84,32 @@ function main()
     end
     bench_stop(runner, "lfu set() with eviction 10k inserts")
 
+    # Bench 9: take() — 10k set+take pairs
+    let c9 = pkg::unbounded_cache()
+    bench_start(runner, 10000)
+    let t = 0
+    while t < 10000
+        c9.set("tk-{t}", t)
+        c9.take("tk-{t}")
+        t += 1
+    end
+    bench_stop(runner, "take() set+take 10k pairs")
+
+    # Bench 10: values() snapshot — 2k snapshots over 1k entries
+    let c10 = pkg::unbounded_cache()
+    let w = 0
+    while w < 1000
+        c10.set("w{w}", w)
+        w += 1
+    end
+    bench_start(runner, 2000)
+    let v = 0
+    while v < 2000
+        c10.values()
+        v += 1
+    end
+    bench_stop(runner, "values() 1k-entry snapshot 2k calls")
+
     bench_summary(runner)
 end
 

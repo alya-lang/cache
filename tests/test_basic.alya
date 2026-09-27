@@ -32,9 +32,11 @@ function on_expire_probe(key, value)
 end
 
 # Backdates one entry's expiry for deterministic expiry tests (no sleep).
+# NOTE: expires_at lives in the clock_ms() domain (ms since boot), so the
+# marker must be a small boot-ms value, not a time() epoch.
 function force_expire(c, key)
     let m = c.meta[key]
-    m.expires_at = time() - 1
+    m.expires_at = 1
     c.meta[key] = m
 end
 
@@ -432,7 +434,99 @@ function main()
     fs_remove("test-snapshot.tmp")
 
     # ═══════════════════════════════════════════════════════════
-    # 19. Edge Cases
+    # 20. Bool Values (set_bool / get_bool / snapshot)
+    # ═══════════════════════════════════════════════════════════
+    let boolc = pkg::new_cache(16, 0)
+    boolc.set_bool("on", 1)
+    boolc.set_bool("off", 0)
+    boolc.set_bool("truthy", "x")
+    boolc.set_int("num", 42)
+    runner_assert_eq(r, boolc.get_bool("on"), 1, "get_bool returns 1 for set_bool(1)")
+    runner_assert_eq(r, boolc.get_bool("off"), 0, "get_bool returns 0 for set_bool(0)")
+    runner_assert_eq(r, boolc.get_bool("truthy"), 1, "set_bool normalizes truthy to 1")
+    runner_assert_true(r, boolc.get_bool("num") is null, "get_bool on int entry is null")
+    runner_assert_true(r, boolc.get_bool("ghost") is null, "get_bool on missing key is null")
+    runner_assert_eq(r, pkg::cache_get_bool(boolc, "on"), 1, "cache_get_bool facade works")
+    boolc.set_bool("t", 1, 3600)
+    let boolsaved = boolc.save("test-bool.tmp")
+    runner_assert_true(r, boolsaved >= 3, "save persists bool entries")
+    let boolback = pkg::new_cache(16, 0)
+    runner_assert_true(r, boolback.load("test-bool.tmp") >= 3, "load restores bool entries")
+    runner_assert_eq(r, boolback.get_bool("on"), 1, "bool 1 round-trips snapshot")
+    runner_assert_eq(r, boolback.get_bool("off"), 0, "bool 0 round-trips snapshot")
+    fs_remove("test-bool.tmp")
+
+    # ═══════════════════════════════════════════════════════════
+    # 21. Typed Batch Inserts (set_many_* + snapshot)
+    # ═══════════════════════════════════════════════════════════
+    let typed = pkg::new_cache(16, 0)
+    runner_assert_eq(r, typed.set_many_str({ "s1": "a", "s2": "b" }), 2, "set_many_str inserts 2")
+    runner_assert_eq(r, typed.set_many_int({ "i1": 7 }), 1, "set_many_int inserts 1")
+    runner_assert_eq(r, typed.set_many_float({ "f1": 2.5 }), 1, "set_many_float inserts 1")
+    runner_assert_eq(r, typed.set_many_bool({ "b1": 1, "b2": 0 }), 2, "set_many_bool inserts 2")
+    runner_assert_str_eq(r, typed.get("s1"), "a", "batch string readable")
+    runner_assert_eq(r, typed.get("i1"), 7, "batch int readable")
+    runner_assert_true(r, typed.get_float("f1") == 2.5, "batch float readable via get_float")
+    runner_assert_eq(r, typed.get_bool("b1"), 1, "batch bool 1 readable")
+    runner_assert_eq(r, typed.get_bool("b2"), 0, "batch bool 0 readable")
+    runner_assert_eq(r, typed.save("test-typed.tmp"), 6, "save persists all 6 typed batch entries")
+    let typedback = pkg::new_cache(16, 0)
+    runner_assert_eq(r, typedback.load("test-typed.tmp"), 6, "load restores 6 typed batch entries")
+    runner_assert_str_eq(r, typedback.get("s2"), "b", "batch string round-trips")
+    runner_assert_true(r, typedback.get_float("f1") == 2.5, "batch float round-trips")
+    fs_remove("test-typed.tmp")
+    runner_assert_eq(r, pkg::cache_set_many_str(typedback, { "k": "v" }), 1, "cache_set_many_str facade works")
+    runner_assert_eq(r, pkg::cache_set_many_int(typedback, { "k": 1 }), 1, "cache_set_many_int facade works")
+    runner_assert_eq(r, pkg::cache_set_many_float(typedback, { "k": 1.5 }), 1, "cache_set_many_float facade works")
+    runner_assert_eq(r, pkg::cache_set_many_bool(typedback, { "k": 0 }), 1, "cache_set_many_bool facade works")
+
+    # ═══════════════════════════════════════════════════════════
+    # 22. Values / Entries / Take / Entry Hits
+    # ═══════════════════════════════════════════════════════════
+    let shape = pkg::new_cache(16, 0)
+    shape.set("a", 1)
+    shape.set("b", 2)
+    shape.set("c", 3)
+    shape.get("a")
+    shape.get("a")
+    shape.get("b")
+    runner_assert_eq(r, shape.entry_hits("a"), 2, "entry_hits counts reads for a")
+    runner_assert_eq(r, shape.entry_hits("b"), 1, "entry_hits counts reads for b")
+    runner_assert_eq(r, shape.entry_hits("ghost"), -1, "entry_hits is -1 for missing key")
+    runner_assert_eq(r, pkg::cache_entry_hits(shape, "a"), 2, "cache_entry_hits facade works")
+    let vals = shape.values()
+    runner_assert_eq(r, len(vals), 3, "values snapshot has 3 entries")
+    let ent = shape.entries()
+    runner_assert_eq(r, len(ent), 3, "entries map has 3 pairs")
+    runner_assert_eq(r, ent["b"], 2, "entries maps b correctly")
+    runner_assert_eq(r, len(pkg::cache_values(shape)), 3, "cache_values facade works")
+    runner_assert_eq(r, len(pkg::cache_entries(shape)), 3, "cache_entries facade works")
+    runner_assert_eq(r, shape.take("b"), 2, "take returns value")
+    runner_assert_eq(r, shape.has("b"), 0, "taken key is gone")
+    runner_assert_true(r, shape.take("b") is null, "take on missing key is null")
+    runner_assert_eq(r, len(shape.values()), 2, "values shrink after take")
+    runner_assert_eq(r, pkg::cache_take(shape, "a"), 1, "cache_take facade works")
+
+    # ═══════════════════════════════════════════════════════════
+    # 23. Millisecond TTL (ttl_ms + ms precision)
+    # ═══════════════════════════════════════════════════════════
+    let msc = pkg::new_cache(8, 0)
+    msc.set("fast", "v", 5)
+    let rest = msc.ttl_ms("fast")
+    runner_assert_true(r, rest > 4000 and rest <= 5000, "ttl_ms reports ms rest within (4000, 5000]")
+    runner_assert_eq(r, msc.ttl("fast"), 5, "ttl rounds up to 5 while ms rest is near-full")
+    runner_assert_eq(r, msc.ttl_ms("persist-key"), -1, "ttl_ms on missing key is -1")
+    msc.set("persist2", "v")
+    runner_assert_eq(r, msc.ttl_ms("persist2"), 0, "ttl_ms on persist entry is 0")
+    runner_assert_eq(r, pkg::cache_ttl_ms(msc, "fast") > 0, 1, "cache_ttl_ms facade works")
+    msc.set("flash2", "v", 1)
+    runner_assert_true(r, msc.ttl_ms("flash2") > 0 and msc.ttl_ms("flash2") <= 1000, "1s entry shows sub-1000ms rest")
+    sleep(1200)
+    runner_assert_eq(r, msc.ttl_ms("flash2"), -1, "ttl_ms is -1 after expiry")
+    runner_assert_eq(r, msc.entry_hits("flash2"), -1, "entry_hits is -1 after expiry")
+
+    # ═══════════════════════════════════════════════════════════
+    # 24. Edge Cases
     # ═══════════════════════════════════════════════════════════
     let tiny = pkg::lru_cache(1, 0)
     tiny.set("a", 1)

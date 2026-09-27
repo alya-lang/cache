@@ -45,11 +45,14 @@ end
 ## reads globally. Values live directly in the `store` map (maps handle
 ## mixed `any` values correctly); only typed metadata lives here.
 ##
+## Timestamps are millisecond epochs (`clock_ms()` base) while the public
+## TTL API stays in whole seconds; `ttl_remaining_ms` exposes the ms rest.
+##
 ## ### Fields
-## - `expires_at`: Unix epoch seconds when the entry expires (`0` = never).
-## - `inserted_at`: Unix epoch seconds when the entry was written.
+## - `expires_at`: Millisecond epoch when the entry expires (`0` = never).
+## - `inserted_at`: Millisecond epoch when the entry was written.
 ## - `entry_hits`: Number of successful reads served from this entry.
-## - `kind`: Value kind tag for snapshots (`"s"`/`"i"`/`"f"`, `""` = unknown).
+## - `kind`: Value kind tag for snapshots (`"s"`/`"i"`/`"f"`/`"b"`, `""` = unknown).
 pub struct CacheMeta
     expires_at: int,
     inserted_at: int,
@@ -161,15 +164,15 @@ end
 ##
 ## ### Parameters
 ## - `ttl`: TTL seconds (`0` = never expires, `< 0` is normalized to `0` here).
-## - `kind`: Value kind tag (`"s"`/`"i"`/`"f"`, `""` = unknown/unsnapshotted).
+## - `kind`: Value kind tag (`"s"`/`"i"`/`"f"`/`"b"`, `""` = unknown/unsnapshotted).
 ##
 ## ### Returns
-## Initialized `CacheMeta` instance.
+## Initialized `CacheMeta` instance (timestamps in millisecond epochs).
 pub function meta_new(ttl: int = 0, kind: string = "") -> CacheMeta
-    let now = time()
+    let now = clock_ms()
     let expires = 0
     if ttl > 0
-        expires = now + ttl
+        expires = now + ttl * 1000
     end
     return CacheMeta {
         expires_at: expires,
@@ -232,7 +235,7 @@ pub function CacheMeta.is_expired(self: CacheMeta) -> int
     if self.expires_at == 0
         return 0
     end
-    if time() >= self.expires_at
+    if clock_ms() >= self.expires_at
         return 1
     end
     return 0
@@ -247,11 +250,26 @@ pub function CacheMeta.is_alive(self: CacheMeta) -> int
 end
 
 ## Returns remaining TTL seconds (`0` means never expires, `0` when elapsed).
+##
+## Rounds up from the millisecond rest, so a live entry always reports
+## at least `1` while it has any time left.
 pub function CacheMeta.ttl_remaining(self: CacheMeta) -> int
     if self.expires_at == 0
         return 0
     end
-    let left = self.expires_at - time()
+    let left = self.expires_at - clock_ms()
+    if left <= 0
+        return 0
+    end
+    return (left + 999) / 1000
+end
+
+## Returns remaining TTL milliseconds (`0` means never expires or elapsed).
+pub function CacheMeta.ttl_remaining_ms(self: CacheMeta) -> int
+    if self.expires_at == 0
+        return 0
+    end
+    let left = self.expires_at - clock_ms()
     if left < 0
         return 0
     end

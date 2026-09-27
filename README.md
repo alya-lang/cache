@@ -13,17 +13,17 @@ High-performance in-memory cache with LRU/LFU/FIFO eviction, TTL expiry, hooks, 
 
 - ⚡ **Zero-Dependency & Pure Alya**: No C code, no FFI, no external services. Values of any type (string, int, array, map) side by side.
 - 🧩 **LRU / LFU / FIFO / Unbounded Flavors**: Least-recently-used, least-frequently-used, first-in-first-out, or no-eviction caches from one API.
-- ⏱️ **Per-Entry TTL**: Default TTL per cache plus per-write override, remaining-time queries, refresh (`expire`/`touch`), TTL jitter against stampedes, and eager expiry on read.
-- 👀 **Peek & Touch**: Non-intrusive reads (`peek`) and recency/TTL refresh without value changes (`touch`).
-- 🔧 **Runtime Reconfiguration**: Resize capacity (`set_capacity`, evicts excess on shrink) and change the default TTL live.
-- 🗂️ **Batch & Prefix Helpers**: `set_many` / `get_many` bulk operations, `delete_by_prefix` invalidation, and `get_or_insert` / `get_or_compute` memoize helpers.
+- ⏱️ **Per-Entry TTL**: Default TTL per cache plus per-write override, remaining-time queries in seconds (`ttl`) or milliseconds (`ttl_ms`), refresh (`expire`/`touch`), TTL jitter against stampedes, and eager expiry on read. Expiry runs on a monotonic millisecond clock, immune to wall-clock jumps.
+- 👀 **Peek, Touch & Take**: Non-intrusive reads (`peek`), recency/TTL refresh without value changes (`touch`), and read-and-remove (`take`).
+- 🗂️ **Shapes & Batch Helpers**: `keys` / `values` / `entries` snapshots, `set_many` / `get_many` bulk operations with typed `set_many_str` / `set_many_int` / `set_many_float` / `set_many_bool` variants, `delete_by_prefix` invalidation, and `get_or_insert` / `get_or_compute` memoize helpers.
 - 🔔 **Eviction & Expiry Hooks**: `on_evict` / `on_expire` callbacks (`fn(key, value)`) for external indexes and cleanup.
-- 💾 **Disk Snapshots**: `save` / `load` line-based snapshots for string/int/float entries written via typed setters.
-- ✍️ **Typed Setters**: `set_str` / `set_int` / `set_float` record kind tags (snapshots, `get_float` reads).
-- 📊 **Built-In Statistics**: Hits, misses, evictions, hit-rate, and one-line summaries via `CacheStats`.
-- 🧹 **Maintenance APIs**: `prune` expired entries, snapshot `keys`, `clear` with counter reset.
+- 💾 **Disk Snapshots**: `save` / `load` line-based snapshots for string/int/float/bool entries written via typed setters.
+- ✍️ **Typed Setters**: `set_str` / `set_int` / `set_float` / `set_bool` record kind tags (snapshots, `get_float` / `get_bool` reads).
+- 📊 **Built-In Statistics**: Hits, misses, evictions, per-entry read counts (`entry_hits`), hit-rate, and one-line summaries via `CacheStats`.
+- 🔧 **Runtime Reconfiguration**: Resize capacity (`set_capacity`, evicts excess on shrink) and change the default TTL live.
+- 🧹 **Maintenance APIs**: `prune` expired entries, `keys` / `values` / `entries` snapshots, `clear` with counter reset.
 - 🔒 **Public/Private Visibility (`pub`)**: Clean facade in `src/lib.alya`; storage engine (`src/core/store.alya`) and snapshots (`src/core/snapshot.alya`) isolated.
-- 🧪 **Enterprise Test & Benchmark Suite**: 150+ assertions (`std/test`) and micro-benchmarks for set/get/peek/evict paths.
+- 🧪 **Enterprise Test & Benchmark Suite**: 200+ assertions (`std/test`) and micro-benchmarks for set/get/peek/evict/take/values paths.
 
 > [!NOTE]
 > **Performance characteristics:** Point operations (`set`/`get`/`has`/`delete`) are O(1) map operations, except LRU reads which refresh recency in O(n) over the order array. LRU/FIFO eviction is O(1) amortized; LFU eviction scans frequencies in O(n). Best suited for small-to-medium caches (hundreds to low thousands of entries).
@@ -54,7 +54,7 @@ cache/
 ```
 
 > [!NOTE]
-> **Storage Layout:** User values live directly in the `store` map (maps handle mixed `any` values correctly). Expiry, hit counters, and kind tags live as statically-typed `CacheMeta` structs in the parallel `meta` map. Recency order is tracked in the `order` array (front = eviction candidate). Floats set via `set_float` are kept in fixed-point string form and decoded transparently by `get_float`.
+> **Storage Layout:** User values live directly in the `store` map (maps handle mixed `any` values correctly). Expiry, hit counters, and kind tags live as statically-typed `CacheMeta` structs in the parallel `meta` map, with timestamps in millisecond epochs on a monotonic clock (`clock_ms()` base). Recency order is tracked in the `order` array (front = eviction candidate). Floats set via `set_float` are kept in fixed-point string form and decoded transparently by `get_float`; bools set via `set_bool` are normalized to `1`/`0` and read by `get_bool`.
 >
 > **Iteration Discipline:** Loops that iterate order snapshots live in the `src/lib.alya` facade and call loop-free `store` leaves once per key; iterated keys are copied (`"" + k`) before struct calls. This layout works around runtime crashes observed with deeper struct-threading chains.
 
@@ -127,7 +127,7 @@ end
 main()
 ```
 
-TTL semantics: `ttl < 0` uses the cache default, `ttl == 0` never expires, `ttl > 0` expires that many seconds from now. `capacity <= 0` means unbounded.
+TTL semantics: `ttl < 0` uses the cache default, `ttl == 0` never expires, `ttl > 0` expires that many seconds from now. `capacity <= 0` means unbounded. Expiry is tracked in milliseconds on a monotonic clock, so `ttl()` rounds the rest up to whole seconds while `ttl_ms()` reports exact milliseconds.
 
 ---
 
@@ -159,9 +159,12 @@ TTL semantics: `ttl < 0` uses the cache default, `ttl == 0` never expires, `ttl 
 | `Cache.set_str(self, key, value, ttl = -1)` | `pub method` | Inserts a string, tagged for snapshots. |
 | `Cache.set_int(self, key, value, ttl = -1)` | `pub method` | Inserts an int, tagged for snapshots. |
 | `Cache.set_float(self, key, value, ttl = -1)` | `pub method` | Inserts a float, tagged for snapshots. |
+| `Cache.set_bool(self, key, value, ttl = -1)` | `pub method` | Inserts a bool (normalized to `1`/`0`), tagged for snapshots. |
 | `Cache.set_jittered(self, key, value, ttl, max_jitter = 0)` | `pub method` | Inserts with TTL jitter against stampedes. |
 | `Cache.get(self, key)` | `pub method` | Returns the value, or null on miss/expiry. |
 | `Cache.get_float(self, key)` | `pub method` | Returns the float for a `set_float` entry, or null. |
+| `Cache.get_bool(self, key)` | `pub method` | Returns the bool (`1`/`0`) for a `set_bool` entry, or null. |
+| `Cache.take(self, key)` | `pub method` | Returns the value and removes the entry, or null on miss/expiry. |
 | `Cache.peek(self, key)` | `pub method` | Reads without recency or counter effects. |
 | `Cache.get_or(self, key, fallback)` | `pub method` | Returns the value, or `fallback` on miss/expiry. |
 | `Cache.get_or_insert(self, key, value, ttl = -1)` | `pub method` | Returns the live value, inserting `value` first on miss. |
@@ -175,9 +178,13 @@ TTL semantics: `ttl < 0` uses the cache default, `ttl == 0` never expires, `ttl 
 | `Cache.len(self)` | `pub method` | Returns the entry count. |
 | `Cache.is_empty(self)` | `pub method` | Returns `1` when empty. |
 | `Cache.keys(self)` | `pub method` | Returns a snapshot array of live keys (prunes first). |
+| `Cache.values(self)` | `pub method` | Returns a snapshot array of live values (prunes first, no hit counting). |
+| `Cache.entries(self)` | `pub method` | Returns a map of all live key -> value pairs (prunes first). |
 | `Cache.prune(self)` | `pub method` | Removes expired entries. Returns pruned count. |
 | `Cache.stats(self)` | `pub method` | Returns a `CacheStats` snapshot. |
+| `Cache.entry_hits(self, key)` | `pub method` | Per-entry read count (`-1` missing/expired). |
 | `Cache.ttl(self, key)` | `pub method` | Remaining TTL seconds (`-1` missing/expired, `0` persist). |
+| `Cache.ttl_ms(self, key)` | `pub method` | Remaining TTL milliseconds (`-1` missing/expired, `0` persist). |
 | `Cache.expire(self, key, ttl)` | `pub method` | Refreshes a live entry's TTL. Returns `1` on success. |
 | `Cache.touch(self, key, ttl = -1)` | `pub method` | Refreshes recency/TTL without changing value. |
 | `Cache.set_capacity(self, capacity)` | `pub method` | Resizes capacity, evicting excess on shrink. |
@@ -185,6 +192,10 @@ TTL semantics: `ttl < 0` uses the cache default, `ttl == 0` never expires, `ttl 
 | `Cache.on_evict(self, cb)` | `pub method` | Registers eviction callback `fn(key, value)`. |
 | `Cache.on_expire(self, cb)` | `pub method` | Registers expiry callback `fn(key, value)`. |
 | `Cache.set_many(self, values, ttl = -1)` | `pub method` | Bulk insert from a map. Returns inserted count. |
+| `Cache.set_many_str(self, values, ttl = -1)` | `pub method` | Bulk insert tagging every entry as string (persisted). |
+| `Cache.set_many_int(self, values, ttl = -1)` | `pub method` | Bulk insert tagging every entry as int (persisted). |
+| `Cache.set_many_float(self, values, ttl = -1)` | `pub method` | Bulk insert encoding every entry as float (persisted). |
+| `Cache.set_many_bool(self, values, ttl = -1)` | `pub method` | Bulk insert normalizing every entry to bool (persisted). |
 | `Cache.get_many(self, key_list)` | `pub method` | Bulk read into a live key -> value map. |
 | `Cache.save(self, path)` | `pub method` | Persists typed entries to a snapshot file. Returns count. |
 | `Cache.load(self, path)` | `pub method` | Restores entries from a snapshot file. Returns count. |
@@ -193,7 +204,7 @@ TTL semantics: `ttl < 0` uses the cache default, `ttl == 0` never expires, `ttl 
 
 ### Functional Facades
 
-`cache_set`, `cache_set_str`, `cache_set_int`, `cache_set_float`, `cache_set_jittered`, `cache_get`, `cache_get_float`, `cache_peek`, `cache_get_or`, `cache_get_or_insert`, `cache_get_or_compute`, `cache_has`, `cache_delete`, `cache_delete_by_prefix`, `cache_clear`, `cache_size`, `cache_keys`, `cache_prune`, `cache_stats`, `cache_set_many`, `cache_get_many`, `cache_touch`, `cache_set_capacity`, `cache_set_default_ttl`, `cache_on_evict`, `cache_on_expire`, `cache_save`, `cache_load` — same behavior with an explicit `Cache` first argument.
+`cache_set`, `cache_set_str`, `cache_set_int`, `cache_set_float`, `cache_set_bool`, `cache_set_jittered`, `cache_set_many`, `cache_set_many_str`, `cache_set_many_int`, `cache_set_many_float`, `cache_set_many_bool`, `cache_get`, `cache_get_float`, `cache_get_bool`, `cache_peek`, `cache_get_or`, `cache_get_or_insert`, `cache_get_or_compute`, `cache_get_many`, `cache_has`, `cache_delete`, `cache_take`, `cache_delete_by_prefix`, `cache_clear`, `cache_size`, `cache_keys`, `cache_values`, `cache_entries`, `cache_prune`, `cache_stats`, `cache_entry_hits`, `cache_ttl_ms`, `cache_touch`, `cache_set_capacity`, `cache_set_default_ttl`, `cache_on_evict`, `cache_on_expire`, `cache_save`, `cache_load` — same behavior with an explicit `Cache` first argument.
 
 ### Types
 
@@ -201,7 +212,7 @@ TTL semantics: `ttl < 0` uses the cache default, `ttl == 0` never expires, `ttl 
 |---|---|---|
 | `EvictionPolicy` | `pub enum` | `None = 0`, `LRU = 1`, `FIFO = 2`, `LFU = 3`. |
 | `CacheOptions` | `pub struct` | `capacity`, `default_ttl`, `policy`. |
-| `CacheMeta` | `pub struct` | `expires_at`, `inserted_at`, `entry_hits`, `kind` (+ `is_expired`, `is_alive`, `ttl_remaining`). |
+| `CacheMeta` | `pub struct` | `expires_at`, `inserted_at` (ms epochs), `entry_hits`, `kind` (+ `is_expired`, `is_alive`, `ttl_remaining`, `ttl_remaining_ms`). |
 | `Cache` | `pub struct` | Container with `store` / `meta` maps, `order`, `capacity`, `default_ttl`, `policy`, `hits`, `misses`, `evictions`, `evict_hook`, `expire_hook`. |
 | `CacheStats` | `pub struct` | Snapshot with `total_requests`, `hit_rate`, `summary`. |
 

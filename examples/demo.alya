@@ -126,6 +126,22 @@ function main()
     say "loaded => " + str(m2.load("demo-snap.tmp")) + " entries"
     say "who => " + m2.get("who")
     say ""
+
+    # ───────────────────────────────────────────────────────────
+    # 9. Bool, Batch Types, Shapes & Millisecond TTL
+    # ───────────────────────────────────────────────────────────
+    say "--- 9. Bool, Shapes & ms TTL ---"
+    let misc = pkg::new_cache(16, 0)
+    misc.set_bool("dark_mode", 1)
+    say "dark_mode => " + str(misc.get_bool("dark_mode"))
+    misc.set_many_int({ "one": 1, "two": 2 })
+    say "values count => " + str(len(misc.values()))
+    say "entries[one] => " + str(misc.entries()["one"])
+    say "take two => " + str(misc.take("two"))
+    misc.set("quick", "x", 30)
+    say "quick ttl_ms => " + str(misc.ttl_ms("quick"))
+    say "quick reads => " + str(misc.entry_hits("quick"))
+    say ""
     fs_remove("demo-snap.tmp")
 
     say "Done!"

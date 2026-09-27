@@ -1,17 +1,17 @@
 ## cache Snapshot Serialization (save/load)
 ##
 ## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
-## Line-based snapshot format for scalar values (string/int/float):
+## Line-based snapshot format for scalar values (string/int/float/bool):
 ##
 ## ```text
 ## alyacache\tv1
 ## <escaped key>\t<kind>\t<ttl seconds>\t<escaped value>
 ## ```
 ##
-## - `kind` is `s` (string), `i` (int), or `f` (float). Other value types
-##   (arrays, maps, bools-as-ints aside) are skipped on save.
-## - `ttl` is remaining seconds (`0` = persist). Already-expired entries
-##   are skipped on save; malformed lines are skipped on load.
+## - `kind` is `s` (string), `i` (int), `f` (float), or `b` (bool as 1/0).
+##   Other value types (arrays, maps) are skipped on save.
+## - `ttl` is remaining seconds, rounded up (`0` = persist). Already-expired
+##   entries are skipped on save; malformed lines are skipped on load.
 ## - Keys and values escape `\`, tab, newline, and carriage return.
 
 import "std/str"
@@ -125,10 +125,10 @@ end
 ## Serializes one entry into a snapshot line, or "" when skipped.
 ##
 ## Only entries written via the typed setters (`set_str`/`set_int`/
-## `set_float`) carry a kind tag and are persisted; generic `set` values
-## and already-expired entries are skipped. (Runtime type detection via
-## `is` is unreliable for dynamic values on some builds, so the kind is
-## recorded explicitly at write time.)
+## `set_float`/`set_bool` and the `set_many_*` batch variants) carry a kind
+## tag and are persisted; generic `set`/`set_many` values and already-expired
+## entries are skipped. (Runtime type detection via `is` is unreliable for
+## dynamic values on some builds, so the kind is recorded at write time.)
 ##
 ## NOTE: Loop-free leaf (single entry, no iteration). Called once per key
 ## from the save loop in the lib facade.
@@ -137,14 +137,15 @@ pub function snapshot_line(c: Cache, key) -> string
         if key in c.meta
             let meta = c.meta[key]
             let kind = meta.kind
-            if kind == "s" or kind == "i" or kind == "f"
+            if kind == "s" or kind == "i" or kind == "f" or kind == "b"
                 # "f" values are already fixed-point strings (see set_float).
                 let repr = str(c.store[key])
                 if meta.expires_at != 0
-                    let ttl_left = meta.expires_at - time()
-                    if ttl_left <= 0
+                    let ms_left = meta.expires_at - clock_ms()
+                    if ms_left <= 0
                         return ""
                     end
+                    let ttl_left = (ms_left + 999) / 1000
                     return snapshot_escape(key) + "\t" + kind + "\t" + str(ttl_left) + "\t" + snapshot_escape(repr)
                 end
                 return snapshot_escape(key) + "\t" + kind + "\t0\t" + snapshot_escape(repr)
@@ -157,7 +158,8 @@ end
 ## Parses a snapshot line into `[key, value, ttl, kind]` or null when malformed.
 ##
 ## `"f"` values stay in fixed-point string form (decoded lazily on read);
-## `"i"` values are converted with `to_int` eagerly.
+## `"i"` values are converted with `to_int` eagerly; `"b"` values are
+## normalized to `1`/`0` with the `"b"` tag.
 ##
 ## NOTE: Plain sequential `if`s on purpose: `when` value patterns on
 ## dynamic strings miscompile on some builds. `==` is reliable.
@@ -179,6 +181,12 @@ pub function snapshot_parse(line: string)
     if kind == "f"
         # Already fixed-point form; stored as-is with the "f" tag.
         return [key, raw, ttl, "f"]
+    end
+    if kind == "b"
+        if to_int(raw) == 0
+            return [key, 0, ttl, "b"]
+        end
+        return [key, 1, ttl, "b"]
     end
     return null
 end

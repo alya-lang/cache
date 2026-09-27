@@ -22,12 +22,12 @@ function resolve_ttl(ttl: int, default_ttl: int) -> int
     return ttl
 end
 
-# Converts a TTL into an absolute expiry epoch (`0` = never expires).
+# Converts a TTL in seconds into an absolute millisecond epoch (`0` = never).
 function expiry_for(ttl: int) -> int
     if ttl <= 0
         return 0
     end
-    return time() + ttl
+    return clock_ms() + ttl * 1000
 end
 
 # Returns 1 when `meta` is expired right now, 0 otherwise.
@@ -35,7 +35,7 @@ function meta_expired(meta: CacheMeta) -> int
     if meta.expires_at == 0
         return 0
     end
-    if time() >= meta.expires_at
+    if clock_ms() >= meta.expires_at
         return 1
     end
     return 0
@@ -175,7 +175,7 @@ end
 ## `1` on success.
 pub function store_set(c: Cache, key, value, ttl: int = -1, kind: string = "") -> int
     let effective = resolve_ttl(ttl, c.default_ttl)
-    let now = time()
+    let now = clock_ms()
     let expires = expiry_for(effective)
     let exists = key in c.store ? 1 : 0
 
@@ -315,7 +315,7 @@ end
 pub function prune_key(c: Cache, key) -> int
     if key in c.meta
         let meta = c.meta[key]
-        if meta.expires_at != 0 and time() >= meta.expires_at
+        if meta.expires_at != 0 and clock_ms() >= meta.expires_at
             let gone = null
             if key in c.store
                 gone = c.store[key]
@@ -344,7 +344,8 @@ end
 
 ## Returns remaining TTL seconds for `key` (`-1` when missing/expired).
 ##
-## A live entry with no expiry reports `0` (never expires).
+## A live entry with no expiry reports `0` (never expires). Rounds up,
+## so a live entry always reports at least `1` while it has time left.
 pub function store_ttl(c: Cache, key) -> int
     if key in c.store
         if key in c.meta
@@ -359,7 +360,35 @@ pub function store_ttl(c: Cache, key) -> int
             if meta.expires_at == 0
                 return 0
             end
-            let left = meta.expires_at - time()
+            let left = meta.expires_at - clock_ms()
+            if left <= 0
+                return 0
+            end
+            return (left + 999) / 1000
+        end
+        return 0
+    end
+    return -1
+end
+
+## Returns remaining TTL milliseconds for `key` (`-1` missing/expired).
+##
+## A live entry with no expiry reports `0` (never expires).
+pub function store_ttl_ms(c: Cache, key) -> int
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                let gone = c.store[key]
+                drop_key(c, key)
+                c.misses += 1
+                fire_expire(c, key, gone)
+                return -1
+            end
+            if meta.expires_at == 0
+                return 0
+            end
+            let left = meta.expires_at - clock_ms()
             if left < 0
                 return 0
             end
@@ -368,6 +397,64 @@ pub function store_ttl(c: Cache, key) -> int
         return 0
     end
     return -1
+end
+
+## Returns the per-entry read count for a live `key` (`-1` missing/expired).
+##
+## Expired entries are removed eagerly and reported as absent. Useful for
+## inspecting LFU frequencies without touching counters or recency.
+pub function store_entry_hits(c: Cache, key) -> int
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                let gone = c.store[key]
+                drop_key(c, key)
+                c.misses += 1
+                fire_expire(c, key, gone)
+                return -1
+            end
+            return meta.entry_hits
+        end
+        return 0
+    end
+    return -1
+end
+
+## Reads `key` as a bool written via `set_bool` (1/0), or null otherwise.
+##
+## Mirrors `store_get_float`: miss/expiry/wrong-kind yields null, with the
+## same hit/miss accounting and LRU refresh on live reads.
+pub function store_get_bool(c: Cache, key)
+    if key in c.store
+        if key in c.meta
+            let meta = c.meta[key]
+            if meta_expired(meta) == 1
+                let gone = c.store[key]
+                drop_key(c, key)
+                c.misses += 1
+                fire_expire(c, key, gone)
+                return null
+            end
+            if meta.kind != "b"
+                c.misses += 1
+                return null
+            end
+            meta.entry_hits += 1
+            c.meta[key] = meta
+            c.hits += 1
+            if c.policy == EvictionPolicy.LRU
+                touch_key(c, key)
+            end
+            if c.store[key] == 0
+                return 0
+            end
+            return 1
+        end
+        return null
+    end
+    c.misses += 1
+    return null
 end
 
 ## Refreshes the TTL of a live entry. Returns 1 on success, 0 if missing.
