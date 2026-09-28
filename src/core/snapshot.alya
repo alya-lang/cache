@@ -1,7 +1,9 @@
 ## cache Snapshot Serialization (save/load)
 ##
 ## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
-## Line-based snapshot format for scalar values (string/int/float/bool):
+## Line-based snapshot format for scalar values (string/int/float/bool).
+## Compiled only with the `snapshot` feature (default-on); the scalar
+## codec lives in `./codec.alya` and is always available.
 ##
 ## ```text
 ## alyacache\tv1
@@ -15,63 +17,11 @@
 ## - Keys and values escape `\`, tab, newline, and carriage return.
 
 import "std/str"
-import "std/math"
 import "../types.alya"
 
 ## Format header line identifying snapshot files.
 pub function snapshot_header() -> string
     return "alyacache\tv1"
-end
-
-# Left-pads an integer with zeros to 6 digits.
-function pad6(n: int) -> string
-    let s = str(n)
-    while len(s) < 6
-        s = "0" + s
-    end
-    return s
-end
-
-## Encodes a float with fixed 6-decimal precision (e.g. `"-3.500000"`).
-##
-## NOTE: Manual codec on purpose: `str()` on float values prints raw bits
-## on some builds, so floats never go through `str()` here. Precision is
-## 6 decimals; very large magnitudes may lose exactness.
-pub function snapshot_encode_float(v: float) -> string
-    let neg = 0
-    let a = v
-    if a < 0.0
-        neg = 1
-        a = 0.0 - a
-    end
-    let whole = floor(a)
-    let frac = round((a - whole) * 1000000.0)
-    if frac >= 1000000
-        whole = whole + 1
-        frac = 0
-    end
-    let out = str(whole) + "." + pad6(frac)
-    if neg == 1
-        out = "-" + out
-    end
-    return out
-end
-
-## Decodes a string produced by `snapshot_encode_float`.
-pub function snapshot_decode_float(s: string) -> float
-    let t = s
-    let neg = 1.0
-    if len(t) > 0 and t[..1] == "-"
-        neg = 0.0 - 1.0
-        t = t[1..]
-    end
-    let dot = index_of(t, ".")
-    if dot < 0
-        return neg * to_int(t)
-    end
-    let whole = to_int(t[..dot])
-    let frac = to_int(t[(dot + 1)..])
-    return neg * (whole + frac / 1000000.0)
 end
 
 ## Escapes `\`, tab, newline, and carriage return in `s`.

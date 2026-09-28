@@ -4,9 +4,12 @@
 ## Serves as the primary public entry point for the cache package,
 ## exposing constructors, stateful Cache methods, and batch helpers.
 
+@cfg(feature = "snapshot")
 import "std/fs"
 import "./types.alya"
 import "./core/store.alya"
+import "./core/codec.alya"
+@cfg(feature = "snapshot")
 import "./core/snapshot.alya"
 
 # ───────────────────────────────────────────────────────────────
@@ -500,12 +503,15 @@ end
 
 ## Persists live entries written via typed setters to `path`.
 ##
+## Requires the `snapshot` feature (default-on).
+##
 ## Only `set_str`/`set_int`/`set_float`/`set_bool` entries (and the
 ## `set_many_*` batch variants) carry a kind tag and are persisted
 ## (string/int/float/bool); generic `set`/`set_many` values, already-expired
 ## entries, and other types are skipped. Format is line-based
 ## (`alyacache v1` header, tab-separated fields). Returns the number of
 ## entries persisted.
+@cfg(feature = "snapshot")
 pub function Cache.save(self: Cache, path: string) -> int
     let content = snapshot_header()
     let count = 0
@@ -524,9 +530,12 @@ end
 
 ## Restores entries from a snapshot file created by `save`.
 ##
+## Requires the `snapshot` feature (default-on).
+##
 ## Merges into the current content (existing keys are overwritten).
 ## Missing files restore nothing; malformed lines are skipped. Returns
 ## the number of entries restored.
+@cfg(feature = "snapshot")
 pub function Cache.load(self: Cache, path: string) -> int
     if fs_exists(path) == 0
         return 0
@@ -790,6 +799,9 @@ pub function cache_on_expire(c: Cache, cb)
 end
 
 ## Functional `save` operating on an explicit cache instance.
+##
+## Requires the `snapshot` feature (default-on).
+@cfg(feature = "snapshot")
 pub function cache_save(c: Cache, path: string) -> int
     let content = snapshot_header()
     let count = 0
@@ -807,6 +819,9 @@ pub function cache_save(c: Cache, path: string) -> int
 end
 
 ## Functional `load` operating on an explicit cache instance.
+##
+## Requires the `snapshot` feature (default-on).
+@cfg(feature = "snapshot")
 pub function cache_load(c: Cache, path: string) -> int
     if fs_exists(path) == 0
         return 0

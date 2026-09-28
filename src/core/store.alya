@@ -8,7 +8,7 @@
 ## live as typed `CacheMeta` structs in the parallel `meta` map.
 
 import "../types.alya"
-import "./snapshot.alya"
+import "./codec.alya"
 
 # ───────────────────────────────────────────────────────────────
 # Private Helpers

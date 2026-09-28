@@ -17,7 +17,7 @@ High-performance in-memory cache with LRU/LFU/FIFO eviction, TTL expiry, hooks, 
 - 👀 **Peek, Touch & Take**: Non-intrusive reads (`peek`), recency/TTL refresh without value changes (`touch`), and read-and-remove (`take`).
 - 🗂️ **Shapes & Batch Helpers**: `keys` / `values` / `entries` snapshots, `set_many` / `get_many` bulk operations with typed `set_many_str` / `set_many_int` / `set_many_float` / `set_many_bool` variants, `delete_by_prefix` invalidation, and `get_or_insert` / `get_or_compute` memoize helpers.
 - 🔔 **Eviction & Expiry Hooks**: `on_evict` / `on_expire` callbacks (`fn(key, value)`) for external indexes and cleanup.
-- 💾 **Disk Snapshots**: `save` / `load` line-based snapshots for string/int/float/bool entries written via typed setters.
+- 💾 **Disk Snapshots**: `save` / `load` line-based snapshots for string/int/float/bool entries written via typed setters. Optional `snapshot` feature (enabled by default).
 - ✍️ **Typed Setters**: `set_str` / `set_int` / `set_float` / `set_bool` record kind tags (snapshots, `get_float` / `get_bool` reads).
 - 📊 **Built-In Statistics**: Hits, misses, evictions, per-entry read counts (`entry_hits`), hit-rate, and one-line summaries via `CacheStats`.
 - 🔧 **Runtime Reconfiguration**: Resize capacity (`set_capacity`, evicts excess on shrink) and change the default TTL live.
@@ -44,7 +44,8 @@ cache/
 │   ├── types.alya          # EvictionPolicy, CacheOptions, CacheMeta, Cache, CacheStats + factories
 │   └── core/
 │       ├── store.alya      # Storage engine: set/get/has/delete/TTL/eviction/prune leaves
-│       └── snapshot.alya   # Snapshot format: escaping, float codec, line builder/parser
+│       ├── codec.alya      # Scalar codec: fixed-point float encode/decode (always compiled)
+│       └── snapshot.alya   # Snapshot format: escaping, line builder/parser (`snapshot` feature)
 ├── examples/
 │   └── demo.alya           # Comprehensive runnable walkthrough of all package capabilities
 ├── tests/
@@ -74,6 +75,22 @@ Or install it directly using the Alya package CLI:
 ```bash
 alya add cache --git https://github.com/alya-lang/cache --branch main
 alya install
+```
+
+### Package Features
+
+| Feature | Default | Description |
+|:---|:---:|:---|
+| `snapshot` | ✅ | File persistence (`save` / `load`). Without it the in-memory API is unchanged. |
+
+```bash
+# Full build (default)
+alya install
+alya test
+
+# Slim build without file persistence
+alya install --no-default-features
+alya test --no-default-features
 ```
 
 ---
