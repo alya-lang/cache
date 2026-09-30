@@ -12,10 +12,6 @@ keywords = ["alya", "alya-lang", "package", "cache", "lru", "fifo", "ttl", "memo
 
 [dependencies]
 
-[features]
-default = ["snapshot"]
-snapshot = []
-
 # [lint]
 # disabled_rules = []
 # exclude = []
@@ -28,3 +24,7 @@ snapshot = []
 
 # [bench]
 # exclude = []
+
+[features]
+default = ["snapshot"]
+snapshot = []
