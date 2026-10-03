@@ -48,10 +48,10 @@ pub function snapshot_unescape(s: string) -> string
     let out = ""
     let i = 0
     let n = len(s)
-    let esc = 0
+    let esc = false
     while i < n
         let ch = char_at(s, i)
-        if esc == 1
+        if esc == true
             when ch
                 is "n" then out = out + "\n"
                 is "t" then out = out + "\t"
@@ -59,10 +59,10 @@ pub function snapshot_unescape(s: string) -> string
                 is "\\" then out = out + "\\"
                 else out = out + ch
             end
-            esc = 0
+            esc = false
         else
             if ch == "\\"
-                esc = 1
+                esc = true
             else
                 out = out + ch
             end

@@ -233,20 +233,20 @@ end
 ## Entries with `expires_at == 0` never expire.
 pub function CacheMeta.is_expired(self: CacheMeta) -> int
     if self.expires_at == 0
-        return 0
+        return false
     end
     if clock_ms() >= self.expires_at
-        return 1
+        return true
     end
-    return 0
+    return false
 end
 
 ## Returns 1 when this entry is live (not expired), 0 otherwise.
 pub function CacheMeta.is_alive(self: CacheMeta) -> int
-    if self.is_expired() == 1
-        return 0
+    if self.is_expired() == true
+        return false
     end
-    return 1
+    return true
 end
 
 ## Returns remaining TTL seconds (`0` means never expires, `0` when elapsed).
@@ -307,9 +307,9 @@ end
 ## Returns 1 when the cache holds no entries, 0 otherwise.
 pub function Cache.is_empty(self: Cache) -> int
     if len(self.store) == 0
-        return 1
+        return true
     end
-    return 0
+    return false
 end
 
 ## Returns lifetime hit-rate percentage string.

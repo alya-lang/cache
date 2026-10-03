@@ -22,10 +22,10 @@ end
 ## on some builds, so floats never go through `str()` here. Precision is
 ## 6 decimals; very large magnitudes may lose exactness.
 pub function snapshot_encode_float(v: float) -> string
-    let neg = 0
+    let neg = false
     let a = v
     if a < 0.0
-        neg = 1
+        neg = true
         a = 0.0 - a
     end
     let whole = floor(a)
@@ -35,7 +35,7 @@ pub function snapshot_encode_float(v: float) -> string
         frac = 0
     end
     let out = str(whole) + "." + pad6(frac)
-    if neg == 1
+    if neg == true
         out = "-" + out
     end
     return out

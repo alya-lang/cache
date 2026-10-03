@@ -108,11 +108,11 @@ end
 ## Normalizes to `1`/`0` (`null` and `0` become `0`, everything else `1`)
 ## and records the `"b"` kind tag so `save` persists the entry.
 pub function Cache.set_bool(self: Cache, key, value, ttl: int = -1) -> int
-    let flag = 1
+    let flag = true
     if value is null
-        flag = 0
-    elif value == 0
-        flag = 0
+        flag = false
+    elif value == false
+        flag = false
     end
     return store_set(self, key, flag, ttl, "b")
 end
@@ -201,7 +201,7 @@ pub function Cache.keys(self: Cache) -> array
     let snapshot = store_order_snapshot(self)
     for k in snapshot
         let key = "" + k
-        if prune_key(self, key) == 1
+        if prune_key(self, key) == true
             continue
         end
         live.push(key)
@@ -223,7 +223,7 @@ pub function Cache.values(self: Cache) -> array
     let snapshot = store_order_snapshot(self)
     for k in snapshot
         let key = "" + k
-        if prune_key(self, key) == 1
+        if prune_key(self, key) == true
             continue
         end
         live.push(key)
@@ -243,7 +243,7 @@ pub function Cache.entries(self: Cache) -> map
     let snapshot = store_order_snapshot(self)
     for k in snapshot
         let key = "" + k
-        if prune_key(self, key) == 1
+        if prune_key(self, key) == true
             continue
         end
         live.push(key)
@@ -268,7 +268,7 @@ pub function Cache.prune(self: Cache) -> int
     let snapshot = store_order_snapshot(self)
     for k in snapshot
         let key = "" + k
-        if prune_key(self, key) == 1
+        if prune_key(self, key) == true
             pruned += 1
         else
             live.push(key)
@@ -343,7 +343,7 @@ pub function Cache.delete_by_prefix(self: Cache, prefix: string) -> int
     for k in snapshot
         let key = "" + k
         if len(key) >= plen and key[..plen] == prefix
-            if store_delete(self, key) == 1
+            if store_delete(self, key) == true
                 count += 1
             end
         end
@@ -433,11 +433,11 @@ pub function Cache.set_many_bool(self: Cache, values: map, ttl: int = -1) -> int
     let n = 0
     for k in keys(values)
         let v = values[k]
-        let flag = 1
+        let flag = true
         if v is null
-            flag = 0
-        elif v == 0
-            flag = 0
+            flag = false
+        elif v == false
+            flag = false
         end
         store_set(self, k, flag, ttl, "b")
         n += 1
@@ -537,7 +537,7 @@ end
 ## the number of entries restored.
 @cfg(feature = "snapshot")
 pub function Cache.load(self: Cache, path: string) -> int
-    if fs_exists(path) == 0
+    if fs_exists(path) == false
         return 0
     end
     let content = fs_read(path)
@@ -579,11 +579,11 @@ end
 
 ## Functional `set_bool` operating on an explicit cache instance.
 pub function cache_set_bool(c: Cache, key, value, ttl: int = -1) -> int
-    let flag = 1
+    let flag = true
     if value is null
-        flag = 0
-    elif value == 0
-        flag = 0
+        flag = false
+    elif value == false
+        flag = false
     end
     return store_set(c, key, flag, ttl, "b")
 end
@@ -634,7 +634,7 @@ pub function cache_keys(c: Cache) -> array
     let snapshot = store_order_snapshot(c)
     for k in snapshot
         let key = "" + k
-        if prune_key(c, key) == 1
+        if prune_key(c, key) == true
             continue
         end
         live.push(key)
@@ -650,7 +650,7 @@ pub function cache_values(c: Cache) -> array
     let snapshot = store_order_snapshot(c)
     for k in snapshot
         let key = "" + k
-        if prune_key(c, key) == 1
+        if prune_key(c, key) == true
             continue
         end
         live.push(key)
@@ -667,7 +667,7 @@ pub function cache_entries(c: Cache) -> map
     let snapshot = store_order_snapshot(c)
     for k in snapshot
         let key = "" + k
-        if prune_key(c, key) == 1
+        if prune_key(c, key) == true
             continue
         end
         live.push(key)
@@ -687,7 +687,7 @@ pub function cache_prune(c: Cache) -> int
     let snapshot = store_order_snapshot(c)
     for k in snapshot
         let key = "" + k
-        if prune_key(c, key) == 1
+        if prune_key(c, key) == true
             pruned += 1
         else
             live.push(key)
@@ -750,7 +750,7 @@ pub function cache_delete_by_prefix(c: Cache, prefix: string) -> int
     for k in snapshot
         let key = "" + k
         if len(key) >= plen and key[..plen] == prefix
-            if store_delete(c, key) == 1
+            if store_delete(c, key) == true
                 count += 1
             end
         end
@@ -823,7 +823,7 @@ end
 ## Requires the `snapshot` feature (default-on).
 @cfg(feature = "snapshot")
 pub function cache_load(c: Cache, path: string) -> int
-    if fs_exists(path) == 0
+    if fs_exists(path) == false
         return 0
     end
     let content = fs_read(path)
@@ -899,11 +899,11 @@ pub function cache_set_many_bool(c: Cache, values: map, ttl: int = -1) -> int
     let n = 0
     for k in keys(values)
         let v = values[k]
-        let flag = 1
+        let flag = true
         if v is null
-            flag = 0
-        elif v == 0
-            flag = 0
+            flag = false
+        elif v == false
+            flag = false
         end
         store_set(c, k, flag, ttl, "b")
         n += 1
