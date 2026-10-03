@@ -31,7 +31,7 @@ function expiry_for(ttl: int) -> int
 end
 
 # Returns 1 when `meta` is expired right now, 0 otherwise.
-function meta_expired(meta: CacheMeta) -> int
+function meta_expired(meta: CacheMeta) -> bool
     if meta.expires_at == 0
         return false
     end
@@ -97,7 +97,7 @@ function evict_one(c: Cache) -> int
 end
 
 # Removes exactly `victim` from both maps and order. Returns 1 if removed.
-function evict_key(c: Cache, victim) -> int
+function evict_key(c: Cache, victim) -> bool
     let value = null
     if victim in c.store
         value = c.store[victim]
@@ -270,7 +270,7 @@ end
 ## Returns 1 when `key` exists and is live, 0 otherwise.
 ##
 ## Expired entries are removed eagerly and reported as absent.
-pub function store_has(c: Cache, key) -> int
+pub function store_has(c: Cache, key) -> bool
     if key in c.store
         if key in c.meta
             let meta = c.meta[key]
@@ -312,7 +312,7 @@ end
 # NOTE: Loop-free leaf on purpose. It is called once per key from the
 # iteration loop in `Cache.prune` (lib facade), keeping struct-map reads
 # out of any loop body inside this module.
-pub function prune_key(c: Cache, key) -> int
+pub function prune_key(c: Cache, key) -> bool
     if key in c.meta
         let meta = c.meta[key]
         if meta.expires_at != 0 and clock_ms() >= meta.expires_at
@@ -463,7 +463,7 @@ end
 ## - `c`: Target `Cache` instance.
 ## - `key`: Entry key string.
 ## - `ttl`: New TTL seconds (`0` = persist, `< 0` uses cache default).
-pub function store_expire(c: Cache, key, ttl: int) -> int
+pub function store_expire(c: Cache, key, ttl: int) -> bool
     if key in c.store
         if key in c.meta
             let meta = c.meta[key]
@@ -510,7 +510,7 @@ end
 ## Returns 1 when `key` is live, 0 when missing/expired. Never touches
 ## hit/miss counters. `ttl = -1` keeps the current expiry, `ttl = 0`
 ## persists the entry, `ttl > 0` sets a fresh TTL from now.
-pub function store_touch(c: Cache, key, ttl: int = -1) -> int
+pub function store_touch(c: Cache, key, ttl: int = -1) -> bool
     if key in c.store
         if key in c.meta
             let meta = c.meta[key]

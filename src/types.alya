@@ -231,7 +231,7 @@ end
 ## Returns 1 when this entry is expired at the current time, 0 otherwise.
 ##
 ## Entries with `expires_at == 0` never expire.
-pub function CacheMeta.is_expired(self: CacheMeta) -> int
+pub function CacheMeta.is_expired(self: CacheMeta) -> bool
     if self.expires_at == 0
         return false
     end
@@ -242,7 +242,7 @@ pub function CacheMeta.is_expired(self: CacheMeta) -> int
 end
 
 ## Returns 1 when this entry is live (not expired), 0 otherwise.
-pub function CacheMeta.is_alive(self: CacheMeta) -> int
+pub function CacheMeta.is_alive(self: CacheMeta) -> bool
     if self.is_expired() == true
         return false
     end
@@ -305,7 +305,7 @@ pub function Cache.len(self: Cache) -> int
 end
 
 ## Returns 1 when the cache holds no entries, 0 otherwise.
-pub function Cache.is_empty(self: Cache) -> int
+pub function Cache.is_empty(self: Cache) -> bool
     if len(self.store) == 0
         return true
     end
