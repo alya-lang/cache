@@ -32,11 +32,11 @@ pub function snapshot_escape(s: string) -> string
     while i < n
         let ch = char_at(s, i)
         when ch
-            is "\\" then out = out + "\\\\"
-            is "\t" then out = out + "\\t"
-            is "\n" then out = out + "\\n"
-            is "\r" then out = out + "\\r"
-            else out = out + ch
+            is "\\" then out += "\\\\"
+            is "\t" then out += "\\t"
+            is "\n" then out += "\\n"
+            is "\r" then out += "\\r"
+            else out += ch
         end
         i += 1
     end
@@ -53,18 +53,18 @@ pub function snapshot_unescape(s: string) -> string
         let ch = char_at(s, i)
         if esc == true
             when ch
-                is "n" then out = out + "\n"
-                is "t" then out = out + "\t"
-                is "r" then out = out + "\r"
-                is "\\" then out = out + "\\"
-                else out = out + ch
+                is "n" then out += "\n"
+                is "t" then out += "\t"
+                is "r" then out += "\r"
+                is "\\" then out += "\\"
+                else out += ch
             end
             esc = false
         else
             if ch == "\\"
                 esc = true
             else
-                out = out + ch
+                out += ch
             end
         end
         i += 1

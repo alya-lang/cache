@@ -544,7 +544,7 @@ pub function store_set_capacity(c: Cache, capacity: int)
     end
     let budget = len(c.store) + 8
     while len(c.store) > capacity and budget > 0
-        budget = budget - 1
+        budget -= 1
         if c.policy == EvictionPolicy.None
             if len(c.order) == 0
                 break

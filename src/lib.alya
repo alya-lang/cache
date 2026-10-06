@@ -520,7 +520,7 @@ pub function Cache.save(self: Cache, path: string) -> int
         let key = "" + k
         let line = snapshot_line(self, key)
         if line != ""
-            content = content + "\n" + line
+            content += "\n" + line
             count += 1
         end
     end
@@ -810,7 +810,7 @@ pub function cache_save(c: Cache, path: string) -> int
         let key = "" + k
         let line = snapshot_line(c, key)
         if line != ""
-            content = content + "\n" + line
+            content += "\n" + line
             count += 1
         end
     end

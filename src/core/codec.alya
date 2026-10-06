@@ -31,7 +31,7 @@ pub function snapshot_encode_float(v: float) -> string
     let whole = floor(a)
     let frac = round((a - whole) * 1000000.0)
     if frac >= 1000000
-        whole = whole + 1
+        whole += 1
         frac = 0
     end
     let out = str(whole) + "." + pad6(frac)
