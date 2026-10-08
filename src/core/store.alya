@@ -97,17 +97,31 @@ function evict_one(c: Cache) -> int
 end
 
 # Removes exactly `victim` from both maps and order. Returns 1 if removed.
+# NOTE: rebuilds maps via reassignment instead of Map.remove on a
+# struct-field receiver (v0.0.20 SIGSEGV workaround; see drop_key).
 function evict_key(c: Cache, victim) -> bool
     let value = null
     if victim in c.store
         value = c.store[victim]
-        c.store.remove(victim)
     else
         return false
     end
-    if victim in c.meta
-        c.meta.remove(victim)
+    let ns = map()
+    for k in c.order
+        let kk = "" + k
+        if kk != victim and kk in c.store
+            ns[kk] = c.store[kk]
+        end
     end
+    let nm = map()
+    for k in c.order
+        let kk = "" + k
+        if kk != victim and kk in c.meta
+            nm[kk] = c.meta[kk]
+        end
+    end
+    c.store = ns
+    c.meta = nm
     detach_key(c, victim)
     c.evictions += 1
     fire_evict(c, victim, value)
@@ -146,17 +160,32 @@ function evict_lfu(c: Cache) -> int
 end
 
 # Removes the entry for `key` from both maps and order. Returns 1 if removed.
+# NOTE: avoids Map.remove on struct-field maps (v0.0.20 SIGSEGV); rebuilds
+# via whole-map reassignment (same known-good op as store_clear).
 function drop_key(c: Cache, key) -> int
-    let existed = false
-    if key in c.store
-        existed = true
-        c.store.remove(key)
+    let existed = key in c.store ? true : false
+    if existed == false
+        detach_key(c, key)
+        return false
     end
-    if key in c.meta
-        c.meta.remove(key)
+    let snapshot = c.order[..]
+    let ns = map()
+    let nm = map()
+    for k in snapshot
+        let kk = "" + k
+        if kk != key
+            if kk in c.store
+                ns[kk] = c.store[kk]
+            end
+            if kk in c.meta
+                nm[kk] = c.meta[kk]
+            end
+        end
     end
+    c.store = ns
+    c.meta = nm
     detach_key(c, key)
-    return existed
+    return true
 end
 
 # ───────────────────────────────────────────────────────────────
@@ -319,9 +348,8 @@ pub function prune_key(c: Cache, key) -> bool
             let gone = null
             if key in c.store
                 gone = c.store[key]
-                c.store.remove(key)
             end
-            c.meta.remove(key)
+            drop_key(c, key)
             fire_expire(c, key, gone)
             return true
         end
