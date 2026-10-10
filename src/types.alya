@@ -116,7 +116,7 @@ function format_hit_rate_internal(hits: int, total: int) -> string
         return "0%"
     end
     let pct = (hits * 100) / total
-    return "{pct}%"
+    return f"{pct}%"
 end
 
 # ───────────────────────────────────────────────────────────────
@@ -292,7 +292,7 @@ end
 
 ## Returns one-line human-readable summary of this snapshot.
 pub function CacheStats.summary(self: CacheStats) -> string
-    return "[Cache] size={self.size}, hits={self.hits}, misses={self.misses}, evictions={self.evictions}, hit_rate={self.hit_rate()}"
+    return f"[Cache] size={self.size}, hits={self.hits}, misses={self.misses}, evictions={self.evictions}, hit_rate={self.hit_rate()}"
 end
 
 # ───────────────────────────────────────────────────────────────
@@ -319,5 +319,5 @@ end
 
 ## Returns one-line summary of size, counters, and hit rate.
 pub function Cache.summary(self: Cache) -> string
-    return "[Cache] size={len(self.store)}, capacity={self.capacity}, hits={self.hits}, misses={self.misses}, evictions={self.evictions}, hit_rate={self.hit_rate()}"
+    return f"[Cache] size={len(self.store)}, capacity={self.capacity}, hits={self.hits}, misses={self.misses}, evictions={self.evictions}, hit_rate={self.hit_rate()}"
 end

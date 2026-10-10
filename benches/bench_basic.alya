@@ -12,7 +12,7 @@ function main()
     bench_start(runner, 20000)
     let i = 0
     while i < 20000
-        c1.set("k{i}", i)
+        c1.set(f"k{i}", i)
         i += 1
     end
     bench_stop(runner, "set() 20k inserts")
@@ -30,7 +30,7 @@ function main()
     bench_start(runner, 20000)
     let k = 0
     while k < 20000
-        c1.get("absent-{k}")
+        c1.get(f"absent-{k}")
         k += 1
     end
     bench_stop(runner, "get() miss 20k reads")
@@ -40,7 +40,7 @@ function main()
     bench_start(runner, 10000)
     let m = 0
     while m < 10000
-        c4.set("key-{m}", m)
+        c4.set(f"key-{m}", m)
         m += 1
     end
     bench_stop(runner, "lru set() with eviction 10k inserts")
@@ -79,7 +79,7 @@ function main()
     bench_start(runner, 10000)
     let q = 0
     while q < 10000
-        c8.set("key-{q}", q)
+        c8.set(f"key-{q}", q)
         q += 1
     end
     bench_stop(runner, "lfu set() with eviction 10k inserts")
@@ -89,8 +89,8 @@ function main()
     bench_start(runner, 10000)
     let t = 0
     while t < 10000
-        c9.set("tk-{t}", t)
-        c9.take("tk-{t}")
+        c9.set(f"tk-{t}", t)
+        c9.take(f"tk-{t}")
         t += 1
     end
     bench_stop(runner, "take() set+take 10k pairs")
@@ -99,7 +99,7 @@ function main()
     let c10 = pkg::unbounded_cache()
     let w = 0
     while w < 1000
-        c10.set("w{w}", w)
+        c10.set(f"w{w}", w)
         w += 1
     end
     bench_start(runner, 2000)

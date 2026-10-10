@@ -193,7 +193,7 @@ function main()
     let big = pkg::unbounded_cache()
     let idx = 0
     while idx < 50
-        big.set("k{idx}", idx)
+        big.set(f"k{idx}", idx)
         idx += 1
     end
     runner_assert_eq(r, big.size(), 50, "unbounded cache grows past default capacity")
@@ -339,7 +339,7 @@ function main()
     resizec.set_capacity(0)
     let gi = 0
     while gi < 30
-        resizec.set("g{gi}", gi)
+        resizec.set(f"g{gi}", gi)
         gi += 1
     end
     runner_assert_eq(r, resizec.size(), 33, "capacity 0 is unbounded")
