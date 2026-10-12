@@ -4,6 +4,17 @@
 import "std/fs"
 import "../src/lib.alya" as pkg
 
+let evicted_log = []
+
+function evicted_note(key, _value)
+    evicted_log.push(key)
+    return 1
+end
+
+function make_value(key)
+    return "made:" + key
+end
+
 function main()
     say "=== cache Package Showcase ==="
     say ""
@@ -150,17 +161,6 @@ function main()
     fs_remove("demo-snap.tmp")
 
     say "Done!"
-end
-
-let evicted_log = []
-
-function evicted_note(key, _value)
-    evicted_log.push(key)
-    return 1
-end
-
-function make_value(key)
-    return "made:" + key
 end
 
 main()
